@@ -5,9 +5,9 @@ import {
   FolderOpen,
   ClipboardList,
   LogOut,
-  Heart,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
+import sbhaLogo from '../assets/sbha-logo.png'
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard', end: true },
@@ -29,20 +29,8 @@ export default function Layout({ children }) {
       {/* Sidebar */}
       <aside className="w-60 flex-shrink-0 bg-white border-r border-gray-100 flex flex-col">
         {/* Logo */}
-        <div className="px-6 py-6 border-b border-gray-100">
-          <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl bg-primary flex items-center justify-center shadow-sm">
-              <Heart className="w-5 h-5 text-white" fill="white" />
-            </div>
-            <div>
-              <div className="font-heading text-lg font-semibold text-gray-800 leading-tight">
-                SBHA
-              </div>
-              <div className="font-body text-[10px] text-gray-400 uppercase tracking-widest leading-tight">
-                Care Manager
-              </div>
-            </div>
-          </div>
+        <div className="px-6 py-5 border-b border-gray-100 flex items-center justify-center">
+          <img src={sbhaLogo} alt="SBHA" className="h-12 w-auto object-contain" />
         </div>
 
         {/* Nav */}

@@ -12,14 +12,18 @@ import {
   User,
   Pill,
   Activity,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react'
 
 export default function Dashboard() {
   const navigate = useNavigate()
   const [patients, setPatients] = useState([])
+  const [inactivePatients, setInactivePatients] = useState([])
   const [pinnedDocs, setPinnedDocs] = useState([])
   const [todayAppts, setTodayAppts] = useState([])
   const [loading, setLoading] = useState(true)
+  const [showInactive, setShowInactive] = useState(false)
 
   useEffect(() => {
     loadDashboardData()
@@ -35,7 +39,6 @@ export default function Dashboard() {
           conditions(name),
           notes(content, created_at)
         `)
-        .eq('status', 'active')
         .order('created_at', { ascending: false }),
       supabase
         .from('documents')
@@ -50,7 +53,9 @@ export default function Dashboard() {
         .order('appointment_date'),
     ])
 
-    setPatients(patientsRes.data || [])
+    const allPatients = patientsRes.data || []
+    setPatients(allPatients.filter(p => p.status === 'active'))
+    setInactivePatients(allPatients.filter(p => p.status !== 'active'))
     setPinnedDocs(docsRes.data || [])
     setTodayAppts(apptsRes.data || [])
     setLoading(false)
@@ -238,67 +243,60 @@ export default function Dashboard() {
             {patients.map((patient) => {
               const age = calcAge(patient.dob)
               const lastNote = getLastNoteDate(patient.notes)
-              const statusLine = getStatusNote(patient.notes)
               const primaryCondition = patient.conditions?.[0]?.name
 
               return (
                 <div
                   key={patient.id}
                   onClick={() => navigate(`/patients/${patient.id}`)}
-                  className="card cursor-pointer hover:shadow-card-hover transition-all duration-200 hover:-translate-y-0.5 group"
+                  className="group cursor-pointer rounded-2xl overflow-hidden border border-amber-100 bg-white shadow-sm hover:shadow-md transition-all duration-200 hover:-translate-y-0.5"
                 >
-                  {/* Patient name + age */}
-                  <div className="flex items-start justify-between mb-3">
-                    <div>
-                      <h3 className="font-heading text-xl font-semibold text-gray-800 group-hover:text-primary transition-colors">
+                  {/* Folder color tab */}
+                  <div className="h-1.5 bg-gradient-to-r from-amber-200 via-orange-100 to-mauve/30" />
+
+                  <div className="p-5">
+                    {/* Name + status badge */}
+                    <div className="flex items-start justify-between gap-2 mb-1">
+                      <h3 className="font-heading text-xl font-semibold text-gray-800 group-hover:text-primary transition-colors leading-tight">
                         {patient.first_name} {patient.last_name}
                       </h3>
-                      {age && (
-                        <p className="font-body text-xs text-gray-400">Age {age}</p>
-                      )}
-                    </div>
-                    <ChevronRight
-                      size={16}
-                      className="text-gray-300 group-hover:text-primary transition-colors mt-1 flex-shrink-0"
-                    />
-                  </div>
-
-                  {/* Primary condition */}
-                  {primaryCondition && (
-                    <div className="flex items-center gap-1.5 mb-2">
-                      <Activity size={12} className="text-mauve flex-shrink-0" />
-                      <span className="font-body text-xs text-mauve font-medium truncate">
-                        {primaryCondition}
-                        {patient.conditions.length > 1 &&
-                          ` +${patient.conditions.length - 1} more`}
+                      <span className="flex-shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-green-50 text-green-600 font-body text-[10px] font-semibold uppercase tracking-wide border border-green-100">
+                        Active
                       </span>
                     </div>
-                  )}
 
-                  {/* Status line */}
-                  <p className="font-body text-xs text-gray-500 leading-relaxed mb-3 line-clamp-2">
-                    {statusLine}
-                  </p>
-
-                  {/* Footer */}
-                  <div className="flex items-center justify-between pt-3 border-t border-gray-50">
-                    {lastNote ? (
-                      <span className="font-body text-[11px] text-gray-400 flex items-center gap-1">
-                        <Clock size={10} />
-                        Note {format(parseISO(lastNote), 'MMM d')}
-                      </span>
-                    ) : (
-                      <span className="font-body text-[11px] text-gray-300">No notes yet</span>
+                    {age && (
+                      <p className="font-body text-xs text-gray-400 mb-3">Age {age}</p>
                     )}
-                    <div className="flex items-center gap-1">
-                      {patient.conditions?.slice(0, 3).map((c, i) => (
-                        <span
-                          key={i}
-                          className="tag bg-primary-light text-primary text-[10px]"
-                        >
-                          {c.name.split(' ')[0]}
+
+                    {/* Primary condition */}
+                    {primaryCondition ? (
+                      <div className="flex items-center gap-1.5 mb-4">
+                        <Activity size={11} className="text-mauve flex-shrink-0" />
+                        <span className="font-body text-xs text-mauve font-medium truncate">
+                          {primaryCondition}
+                          {patient.conditions.length > 1 &&
+                            ` +${patient.conditions.length - 1} more`}
                         </span>
-                      ))}
+                      </div>
+                    ) : (
+                      <div className="mb-4" />
+                    )}
+
+                    {/* Footer: last note date */}
+                    <div className="flex items-center justify-between pt-3 border-t border-amber-50">
+                      {lastNote ? (
+                        <span className="font-body text-[11px] text-gray-400 flex items-center gap-1.5">
+                          <Clock size={10} />
+                          Last note {format(parseISO(lastNote), 'MMM d, yyyy')}
+                        </span>
+                      ) : (
+                        <span className="font-body text-[11px] text-gray-300 italic">No notes yet</span>
+                      )}
+                      <ChevronRight
+                        size={14}
+                        className="text-gray-300 group-hover:text-primary transition-colors flex-shrink-0"
+                      />
                     </div>
                   </div>
                 </div>
@@ -319,6 +317,69 @@ export default function Dashboard() {
           </div>
         )}
       </section>
+
+      {/* Inactive Patients */}
+      {inactivePatients.length > 0 && (
+        <section className="mt-8">
+          <button
+            onClick={() => setShowInactive(p => !p)}
+            className="flex items-center gap-2 mb-3 group"
+          >
+            {showInactive ? <ChevronUp size={15} className="text-gray-400" /> : <ChevronDown size={15} className="text-gray-400" />}
+            <h2 className="font-body text-sm font-semibold text-gray-400 uppercase tracking-wider group-hover:text-gray-600 transition-colors">
+              Inactive Patients
+            </h2>
+            <span className="tag bg-gray-100 text-gray-400 ml-1">{inactivePatients.length}</span>
+          </button>
+
+          {showInactive && (
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+              {inactivePatients.map((patient) => {
+                const age = calcAge(patient.dob)
+                const lastNote = getLastNoteDate(patient.notes)
+                const primaryCondition = patient.conditions?.[0]?.name
+                return (
+                  <div
+                    key={patient.id}
+                    onClick={() => navigate(`/patients/${patient.id}`)}
+                    className="group cursor-pointer rounded-2xl overflow-hidden border border-gray-100 bg-white opacity-70 hover:opacity-100 shadow-sm hover:shadow-md transition-all duration-200"
+                  >
+                    <div className="h-1.5 bg-gray-200" />
+                    <div className="p-5">
+                      <div className="flex items-start justify-between gap-2 mb-1">
+                        <h3 className="font-heading text-xl font-semibold text-gray-600 group-hover:text-primary transition-colors leading-tight">
+                          {patient.first_name} {patient.last_name}
+                        </h3>
+                        <span className="flex-shrink-0 inline-flex items-center px-2 py-0.5 rounded-full bg-gray-100 text-gray-400 font-body text-[10px] font-semibold uppercase tracking-wide border border-gray-200">
+                          Inactive
+                        </span>
+                      </div>
+                      {age && <p className="font-body text-xs text-gray-400 mb-3">Age {age}</p>}
+                      {primaryCondition ? (
+                        <div className="flex items-center gap-1.5 mb-4">
+                          <Activity size={11} className="text-gray-400 flex-shrink-0" />
+                          <span className="font-body text-xs text-gray-400 truncate">{primaryCondition}</span>
+                        </div>
+                      ) : <div className="mb-4" />}
+                      <div className="flex items-center justify-between pt-3 border-t border-gray-50">
+                        {lastNote ? (
+                          <span className="font-body text-[11px] text-gray-400 flex items-center gap-1.5">
+                            <Clock size={10} />
+                            Last note {format(parseISO(lastNote), 'MMM d, yyyy')}
+                          </span>
+                        ) : (
+                          <span className="font-body text-[11px] text-gray-300 italic">No notes</span>
+                        )}
+                        <ChevronRight size={14} className="text-gray-300 group-hover:text-primary transition-colors" />
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </section>
+      )}
     </div>
   )
 }
