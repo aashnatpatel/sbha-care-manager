@@ -39,6 +39,7 @@ export default function IntakeForm() {
   const [reasonForAdvocacy, setReasonForAdvocacy] = useState('')
   const [goals, setGoals] = useState(['', '', ''])
   const [overwhelmingFactors, setOverwhelmingFactors] = useState([])
+  const [overwhelmingOtherText, setOverwhelmingOtherText] = useState('')
 
   // Step 2: Medical History
   const [checkedConditions, setCheckedConditions] = useState([])
@@ -99,8 +100,9 @@ export default function IntakeForm() {
         emergency_contact_relationship: basicInfo.emergency_contact_relationship,
         status: 'active',
         reason_for_advocacy: reasonForAdvocacy,
-        top_goals: goals.filter(g => g.trim()),
-        overwhelming_factors: overwhelmingFactors,
+        overwhelming_factors: overwhelmingFactors.map(f =>
+          f === 'Other' && overwhelmingOtherText.trim() ? `Other: ${overwhelmingOtherText.trim()}` : f
+        ),
         care_experience: careExp,
         insurance_type: insuranceType,
         insurance_provider: insuranceProvider,
@@ -110,6 +112,24 @@ export default function IntakeForm() {
       if (patientError) throw patientError
 
       const patientId = patient.id
+
+      // Insert emergency contact into emergency_contacts table
+      if (basicInfo.emergency_contact_name.trim()) {
+        await supabase.from('emergency_contacts').insert({
+          patient_id: patientId,
+          name: basicInfo.emergency_contact_name,
+          phone: basicInfo.emergency_contact_phone,
+          relationship: basicInfo.emergency_contact_relationship,
+        })
+      }
+
+      // Insert goals into goals table
+      const validGoals = goals.filter(g => g.trim())
+      if (validGoals.length > 0) {
+        await supabase.from('goals').insert(
+          validGoals.map(g => ({ patient_id: patientId, goal_text: g }))
+        )
+      }
 
       // Insert conditions
       const allConditions = [
@@ -299,23 +319,33 @@ export default function IntakeForm() {
               <label className="label">What feels most overwhelming?</label>
               <div className="grid grid-cols-2 gap-2 mt-1">
                 {OVERWHELMING_OPTIONS.map(opt => (
-                  <button
-                    key={opt}
-                    type="button"
-                    onClick={() => toggleOverwhelming(opt)}
-                    className={`flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm font-body text-left transition-all border ${
-                      overwhelmingFactors.includes(opt)
-                        ? 'border-primary bg-primary-light text-primary'
-                        : 'border-gray-100 bg-gray-50 text-gray-600 hover:border-gray-200'
-                    }`}
-                  >
-                    <div className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 transition-all ${
-                      overwhelmingFactors.includes(opt) ? 'bg-primary border-primary' : 'border-gray-300'
-                    }`}>
-                      {overwhelmingFactors.includes(opt) && <Check size={10} className="text-white" />}
-                    </div>
-                    <span className="text-xs leading-tight">{opt}</span>
-                  </button>
+                  <div key={opt} className={opt === 'Other' && overwhelmingFactors.includes('Other') ? 'col-span-2' : ''}>
+                    <button
+                      type="button"
+                      onClick={() => toggleOverwhelming(opt)}
+                      className={`w-full flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm font-body text-left transition-all border ${
+                        overwhelmingFactors.includes(opt)
+                          ? 'border-primary bg-primary-light text-primary'
+                          : 'border-gray-100 bg-gray-50 text-gray-600 hover:border-gray-200'
+                      }`}
+                    >
+                      <div className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 transition-all ${
+                        overwhelmingFactors.includes(opt) ? 'bg-primary border-primary' : 'border-gray-300'
+                      }`}>
+                        {overwhelmingFactors.includes(opt) && <Check size={10} className="text-white" />}
+                      </div>
+                      <span className="text-xs leading-tight">{opt}</span>
+                    </button>
+                    {opt === 'Other' && overwhelmingFactors.includes('Other') && (
+                      <input
+                        className="input mt-1.5 text-sm"
+                        placeholder="Please describe…"
+                        value={overwhelmingOtherText}
+                        onChange={e => setOverwhelmingOtherText(e.target.value)}
+                        autoFocus
+                      />
+                    )}
+                  </div>
                 ))}
               </div>
             </div>

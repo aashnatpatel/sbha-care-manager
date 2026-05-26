@@ -89,6 +89,7 @@ CREATE TABLE appointments (
   location TEXT,
   appointment_date TIMESTAMPTZ NOT NULL,
   notes TEXT,
+  completed BOOLEAN DEFAULT FALSE,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -96,9 +97,35 @@ CREATE TABLE appointments (
 CREATE TABLE notes (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   patient_id UUID REFERENCES patients(id) ON DELETE CASCADE,
-  content TEXT NOT NULL,
+  title TEXT NOT NULL,
+  note_type TEXT,
+  body TEXT,
+  note_date DATE,
+  deleted_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Emergency contacts table
+CREATE TABLE emergency_contacts (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  patient_id UUID REFERENCES patients(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  relationship TEXT,
+  phone TEXT,
+  email TEXT,
+  notes TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Goals table
+CREATE TABLE goals (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  patient_id UUID REFERENCES patients(id) ON DELETE CASCADE,
+  goal_text TEXT NOT NULL,
+  status TEXT DEFAULT 'active',
+  notes TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- Documents table
@@ -133,6 +160,8 @@ ALTER TABLE appointments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE notes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE documents ENABLE ROW LEVEL SECURITY;
 ALTER TABLE hospitalizations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE emergency_contacts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE goals ENABLE ROW LEVEL SECURITY;
 
 -- RLS Policies (single authenticated user has full access)
 CREATE POLICY "Authenticated user has full access to patients"
@@ -161,6 +190,12 @@ CREATE POLICY "Authenticated user has full access to documents"
 
 CREATE POLICY "Authenticated user has full access to hospitalizations"
   ON hospitalizations FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+CREATE POLICY "Authenticated user has full access to emergency_contacts"
+  ON emergency_contacts FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+CREATE POLICY "Authenticated user has full access to goals"
+  ON goals FOR ALL TO authenticated USING (true) WITH CHECK (true);
 
 -- Storage bucket for documents
 INSERT INTO storage.buckets (id, name, public) VALUES ('documents', 'documents', false);
