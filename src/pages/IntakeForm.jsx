@@ -1,7 +1,12 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
-import { ClipboardList, Plus, Trash2, Check, ChevronRight } from 'lucide-react'
+import { ClipboardList, Plus, Trash2, Check, ChevronRight, FileText, Paperclip, X } from 'lucide-react'
+import { useEditor, EditorContent } from '@tiptap/react'
+import StarterKit from '@tiptap/starter-kit'
+import { Underline } from '@tiptap/extension-underline'
+import { Color } from '@tiptap/extension-color'
+import { TextStyle } from '@tiptap/extension-text-style'
 
 const OVERWHELMING_OPTIONS = [
   'Understanding medical information',
@@ -22,7 +27,8 @@ const COMMON_CONDITIONS = [
 
 const INSURANCE_TYPES = ['Medicare', 'Medicaid', 'Medicare + Medicaid', 'Private Insurance', 'Uninsured', 'Other']
 
-const STEPS = ['Basic Info', 'Goals & Concerns', 'Medical History', 'Medications', 'Care Experience', 'Insurance']
+const STEPS = ['Basic Info', 'Goals & Concerns', 'Medical History', 'Medications', 'Care Experience', 'Insurance', 'Historical Notes']
+const INTAKE_NOTE_TYPES = ['General', 'Appointment Summary', 'Phone Call', 'Care Coordination', 'Advocacy Note', 'Family Meeting', 'Other']
 
 export default function IntakeForm() {
   const navigate = useNavigate()
@@ -59,6 +65,13 @@ export default function IntakeForm() {
   const [insuranceType, setInsuranceType] = useState('')
   const [insuranceProvider, setInsuranceProvider] = useState('')
   const [billingConcerns, setBillingConcerns] = useState('')
+
+  // Step 6: Historical Notes
+  const [histNotes, setHistNotes] = useState([])
+  const [histDocs, setHistDocs] = useState([])
+  const [noteFormOpen, setNoteFormOpen] = useState(false)
+  const [noteFormKey, setNoteFormKey] = useState(0)
+  const [noteFormData, setNoteFormData] = useState({ title: '', noteType: 'General', customLabel: '', noteDate: '', noteBody: '', files: [] })
 
   function toggleOverwhelming(opt) {
     setOverwhelmingFactors(prev =>
@@ -172,6 +185,62 @@ export default function IntakeForm() {
         await supabase.from('hospitalizations').insert(
           validHosps.map(h => ({ patient_id: patientId, ...h }))
         )
+      }
+
+      // Insert historical notes
+      console.log('[handleSubmit] histNotes to save:', histNotes.length)
+      for (const hn of histNotes) {
+        if (!hn.title.trim()) continue
+        console.log('[handleSubmit] Inserting note:', { title: hn.title, note_type: hn.noteType, patient_id: patientId })
+        const { data: noteData, error: noteError } = await supabase.from('notes').insert({
+          patient_id: patientId,
+          title: hn.title,
+          note_type: hn.noteType,
+          note_date: hn.noteDate || null,
+          body: hn.noteBody,
+        }).select().single()
+        console.log('[handleSubmit] Note insert result:', { noteData, noteError })
+        if (noteError) {
+          console.error('[handleSubmit] Note insert failed:', noteError)
+          continue
+        }
+        if (noteData && hn.files.length > 0) {
+          for (const file of hn.files) {
+            const path = `notes/${patientId}/${noteData.id}/${Date.now()}-${file.name}`
+            console.log('[handleSubmit] Uploading attachment to path:', path)
+            const { data: upload, error: uploadError } = await supabase.storage.from('documents').upload(path, file)
+            console.log('[handleSubmit] Storage upload result:', { upload, uploadError })
+            if (uploadError) { console.error('[handleSubmit] Storage upload failed:', uploadError); continue }
+            const { data: attachData, error: attachError } = await supabase.from('note_attachments').insert({
+              note_id: noteData.id,
+              patient_id: patientId,
+              name: file.name,
+              file_url: upload.path,
+              file_type: file.type,
+              file_size: file.size,
+            })
+            console.log('[handleSubmit] note_attachments insert result:', { attachData, attachError })
+            if (attachError) console.error('[handleSubmit] note_attachments insert failed:', attachError)
+          }
+        }
+      }
+
+      // Upload historical documents
+      console.log('[handleSubmit] histDocs to upload:', histDocs.length)
+      for (const file of histDocs) {
+        const path = `patients/${patientId}/${Date.now()}-${file.name}`
+        console.log('[handleSubmit] Uploading doc to path:', path)
+        const { data: upload, error: uploadError } = await supabase.storage.from('documents').upload(path, file)
+        console.log('[handleSubmit] Doc upload result:', { upload, uploadError })
+        if (uploadError) { console.error('[handleSubmit] Doc upload failed:', uploadError); continue }
+        const { data: docData, error: docError } = await supabase.from('documents').insert({
+          patient_id: patientId,
+          name: file.name,
+          file_url: upload.path,
+          file_type: file.type,
+        })
+        console.log('[handleSubmit] documents insert result:', { docData, docError })
+        if (docError) console.error('[handleSubmit] documents insert failed:', docError)
       }
 
       navigate(`/patients/${patientId}`)
@@ -599,6 +668,156 @@ export default function IntakeForm() {
           </div>
         )}
 
+        {/* Step 6: Historical Notes */}
+        {step === 6 && (
+          <div className="space-y-5">
+            <div>
+              <h2 className="font-heading text-2xl text-gray-800 mb-1">Historical Notes</h2>
+              <p className="font-body text-sm text-gray-400">Optionally add past notes or upload historical documents for this patient.</p>
+            </div>
+
+            {/* Notes list */}
+            {histNotes.length > 0 && (
+              <div className="space-y-2">
+                {histNotes.map((n, i) => (
+                  <div key={i} className="flex items-start gap-3 bg-gray-50 rounded-xl px-4 py-3">
+                    <FileText size={14} className="text-primary flex-shrink-0 mt-0.5" />
+                    <div className="flex-1 min-w-0">
+                      <p className="font-body text-sm font-medium text-gray-800 truncate">{n.title}</p>
+                      <p className="font-body text-xs text-gray-400">
+                        {n.noteType}{n.noteDate ? ` · ${n.noteDate}` : ''}
+                        {n.files.length > 0 ? ` · ${n.files.length} file${n.files.length > 1 ? 's' : ''}` : ''}
+                      </p>
+                    </div>
+                    <button onClick={() => setHistNotes(prev => prev.filter((_, j) => j !== i))}
+                      className="text-gray-400 hover:text-red-500 p-0.5 flex-shrink-0 transition-colors">
+                      <X size={14} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Inline note form */}
+            {noteFormOpen ? (
+              <div className="border border-gray-200 rounded-xl p-4 space-y-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="label">Title *</label>
+                    <input className="input" placeholder="Note title"
+                      value={noteFormData.title}
+                      onChange={e => setNoteFormData(p => ({ ...p, title: e.target.value }))}
+                      autoFocus />
+                  </div>
+                  <div>
+                    <label className="label">Type</label>
+                    <select className="input" value={noteFormData.noteType}
+                      onChange={e => setNoteFormData(p => ({ ...p, noteType: e.target.value, customLabel: '' }))}>
+                      {INTAKE_NOTE_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                    </select>
+                  </div>
+                </div>
+                {noteFormData.noteType === 'Other' && (
+                  <div>
+                    <label className="label">Custom Label</label>
+                    <input className="input" placeholder="Describe the note type"
+                      value={noteFormData.customLabel}
+                      onChange={e => setNoteFormData(p => ({ ...p, customLabel: e.target.value }))} />
+                  </div>
+                )}
+                <div>
+                  <label className="label">Date</label>
+                  <input className="input" type="date" value={noteFormData.noteDate}
+                    onChange={e => setNoteFormData(p => ({ ...p, noteDate: e.target.value }))} />
+                </div>
+                <div>
+                  <label className="label">Body</label>
+                  <IntakeNoteEditor
+                    key={noteFormKey}
+                    value={noteFormData.noteBody}
+                    onChange={v => setNoteFormData(p => ({ ...p, noteBody: v }))}
+                  />
+                </div>
+                <div>
+                  <label className="label">Attachments</label>
+                  <div className="space-y-1.5">
+                    {noteFormData.files.map((f, i) => (
+                      <div key={i} className="flex items-center gap-2 px-3 py-2 bg-primary-light rounded-lg">
+                        <Paperclip size={12} className="text-primary flex-shrink-0" />
+                        <span className="font-body text-xs text-primary flex-1 truncate">{f.name}</span>
+                        <button type="button" onClick={() => setNoteFormData(p => ({ ...p, files: p.files.filter((_, j) => j !== i) }))}
+                          className="text-primary/60 hover:text-primary p-0.5">
+                          <X size={13} />
+                        </button>
+                      </div>
+                    ))}
+                    <label className="flex items-center gap-2 cursor-pointer px-3 py-2 border border-dashed border-gray-300 rounded-lg hover:border-primary/50 transition-colors">
+                      <Paperclip size={13} className="text-gray-400" />
+                      <span className="font-body text-xs text-gray-500">Attach files</span>
+                      <input type="file" multiple className="hidden"
+                        onChange={e => {
+                          const picked = Array.from(e.target.files || [])
+                          e.target.value = ''
+                          if (picked.length) setNoteFormData(p => ({ ...p, files: [...p.files, ...picked] }))
+                        }} />
+                    </label>
+                  </div>
+                </div>
+                <div className="flex items-center justify-end gap-2 pt-1">
+                  <button type="button" onClick={() => { setNoteFormOpen(false); setNoteFormData({ title: '', noteType: 'General', customLabel: '', noteDate: '', noteBody: '', files: [] }); setNoteFormKey(k => k + 1) }}
+                    className="btn-ghost py-2 px-4 text-sm">Cancel</button>
+                  <button type="button"
+                    disabled={!noteFormData.title.trim()}
+                    onClick={() => {
+                      const resolvedType = noteFormData.noteType === 'Other'
+                        ? (noteFormData.customLabel.trim() || 'Other')
+                        : noteFormData.noteType
+                      setHistNotes(prev => [...prev, { ...noteFormData, noteType: resolvedType }])
+                      setNoteFormData({ title: '', noteType: 'General', customLabel: '', noteDate: '', noteBody: '', files: [] })
+                      setNoteFormKey(k => k + 1)
+                      setNoteFormOpen(false)
+                    }}
+                    className="btn-primary py-2 px-4 text-sm disabled:opacity-50">
+                    Add to List
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button type="button" onClick={() => setNoteFormOpen(true)}
+                className="flex items-center gap-2 text-sm text-primary font-body hover:underline">
+                <Plus size={14} /> Add Note
+              </button>
+            )}
+
+            {/* Historical documents upload */}
+            <div className="pt-2 border-t border-gray-100">
+              <h3 className="font-body text-sm font-semibold text-gray-600 mb-3">Upload Historical Documents</h3>
+              <div className="space-y-1.5">
+                {histDocs.map((f, i) => (
+                  <div key={i} className="flex items-center gap-2 px-3 py-2 bg-gray-50 rounded-lg">
+                    <FileText size={12} className="text-gray-400 flex-shrink-0" />
+                    <span className="font-body text-xs text-gray-600 flex-1 truncate">{f.name}</span>
+                    <button type="button" onClick={() => setHistDocs(prev => prev.filter((_, j) => j !== i))}
+                      className="text-gray-400 hover:text-red-500 p-0.5">
+                      <X size={13} />
+                    </button>
+                  </div>
+                ))}
+                <label className="flex items-center gap-2 cursor-pointer px-3 py-2 border border-dashed border-gray-300 rounded-lg hover:border-primary/50 transition-colors">
+                  <Paperclip size={13} className="text-gray-400" />
+                  <span className="font-body text-xs text-gray-500">Upload documents (PDF, images, etc.)</span>
+                  <input type="file" multiple className="hidden"
+                    onChange={e => {
+                      const picked = Array.from(e.target.files || [])
+                      e.target.value = ''
+                      if (picked.length) setHistDocs(prev => [...prev, ...picked])
+                    }} />
+                </label>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Navigation */}
         <div className="flex items-center justify-between mt-8 pt-6 border-t border-gray-100">
           <button
@@ -642,6 +861,64 @@ export default function IntakeForm() {
         </div>
       </div>
     </div>
+  )
+}
+
+function IntakeNoteEditor({ value, onChange }) {
+  const editor = useEditor({
+    extensions: [StarterKit, Underline, TextStyle, Color],
+    content: value || '',
+    onUpdate({ editor }) { onChange(editor.getHTML()) },
+  })
+  if (!editor) return null
+  const colors = ['#1f2937', '#4F7EE0', '#dc2626', '#16a34a', '#9CA3AF']
+  const cmd = fn => e => { e.preventDefault(); fn() }
+  return (
+    <>
+      <style>{`
+        .intake-note-editor .ProseMirror { min-height: 100px; padding: 10px 14px; font-size: 0.875rem; line-height: 1.6; color: #374151; outline: none; }
+        .intake-note-editor .ProseMirror ul { list-style-type: disc; padding-left: 1.5rem; margin: 0.25rem 0; }
+        .intake-note-editor .ProseMirror ol { list-style-type: decimal; padding-left: 1.5rem; margin: 0.25rem 0; }
+        .intake-note-editor .ProseMirror li { display: list-item; }
+        .intake-note-editor .ProseMirror p { margin: 0 0 0.25rem; }
+        .intake-note-editor .ProseMirror p:last-child { margin-bottom: 0; }
+      `}</style>
+      <div className="intake-note-editor border border-gray-200 rounded-xl overflow-hidden">
+        <div className="flex items-center gap-0.5 px-2 py-1.5 border-b border-gray-100 bg-gray-50 flex-wrap">
+          <button type="button" onMouseDown={cmd(() => editor.chain().focus().toggleBold().run())}
+            className={`w-7 h-7 rounded flex items-center justify-center transition-all ${editor.isActive('bold') ? 'bg-primary text-white' : 'text-gray-500 hover:bg-gray-200'}`}>
+            <strong className="text-xs">B</strong>
+          </button>
+          <button type="button" onMouseDown={cmd(() => editor.chain().focus().toggleItalic().run())}
+            className={`w-7 h-7 rounded flex items-center justify-center transition-all ${editor.isActive('italic') ? 'bg-primary text-white' : 'text-gray-500 hover:bg-gray-200'}`}>
+            <em className="text-xs">I</em>
+          </button>
+          <button type="button" onMouseDown={cmd(() => editor.chain().focus().toggleUnderline().run())}
+            className={`w-7 h-7 rounded flex items-center justify-center transition-all ${editor.isActive('underline') ? 'bg-primary text-white' : 'text-gray-500 hover:bg-gray-200'}`}>
+            <span className="underline text-xs">U</span>
+          </button>
+          <div className="w-px h-4 bg-gray-200 mx-1" />
+          <button type="button" onMouseDown={cmd(() => editor.chain().focus().toggleBulletList().run())}
+            className={`w-7 h-7 rounded flex items-center justify-center transition-all ${editor.isActive('bulletList') ? 'bg-primary text-white' : 'text-gray-500 hover:bg-gray-200'}`}>
+            <span className="text-xs">•≡</span>
+          </button>
+          <button type="button" onMouseDown={cmd(() => editor.chain().focus().toggleOrderedList().run())}
+            className={`w-7 h-7 rounded flex items-center justify-center transition-all ${editor.isActive('orderedList') ? 'bg-primary text-white' : 'text-gray-500 hover:bg-gray-200'}`}>
+            <span className="text-xs">1≡</span>
+          </button>
+          <div className="w-px h-4 bg-gray-200 mx-1" />
+          {colors.map(color => (
+            <button key={color} type="button"
+              onMouseDown={cmd(() => editor.chain().focus().setColor(color).run())}
+              title={color}
+              className="w-4 h-4 rounded-full border border-white shadow-sm hover:scale-110 transition-transform flex-shrink-0"
+              style={{ backgroundColor: color }}
+            />
+          ))}
+        </div>
+        <EditorContent editor={editor} />
+      </div>
+    </>
   )
 }
 

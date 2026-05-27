@@ -531,22 +531,27 @@ export default function PatientProfile() {
     setDeletedNotes(deleted || [])
   }
 
-  async function saveNote({ noteTitle, noteType, noteDate, noteBody }) {
+  async function saveNote({ noteTitle, noteType, noteDate, noteBody, pendingFiles = [] }) {
     if (!noteTitle.trim()) return
     setSavingNote(true)
-    await supabase.from('notes').insert({
+    console.log('[saveNote] Inserting note:', { noteTitle, noteType, noteDate, patient_id: id, pendingFiles: pendingFiles.length })
+    const { data: noteData, error: noteError } = await supabase.from('notes').insert({
       patient_id: id,
       title: noteTitle,
       note_type: noteType,
       note_date: noteDate,
       body: noteBody,
-    })
+    }).select().single()
+    console.log('[saveNote] Insert result:', { noteData, noteError })
+    if (noteData && pendingFiles.length > 0) {
+      await uploadNoteFiles(noteData.id, id, pendingFiles)
+    }
     await refreshNotes()
     setNoteModal(null)
     setSavingNote(false)
   }
 
-  async function updateNote(noteId, { noteTitle, noteType, noteDate, noteBody }) {
+  async function updateNote(noteId, { noteTitle, noteType, noteDate, noteBody, pendingFiles = [] }) {
     if (!noteTitle.trim()) return
     setSavingNote(true)
     await supabase.from('notes').update({
@@ -555,6 +560,9 @@ export default function PatientProfile() {
       note_date: noteDate,
       body: noteBody,
     }).eq('id', noteId)
+    if (pendingFiles.length > 0) {
+      await uploadNoteFiles(noteId, id, pendingFiles)
+    }
     await refreshNotes()
     setNoteModal(null)
     setSavingNote(false)
@@ -574,6 +582,33 @@ export default function PatientProfile() {
     if (!window.confirm('Permanently delete this note? This cannot be undone.')) return
     await supabase.from('notes').delete().eq('id', noteId)
     setDeletedNotes(prev => prev.filter(n => n.id !== noteId))
+  }
+
+  async function uploadNoteFiles(noteId, patientId, files) {
+    console.log('[uploadNoteFiles] noteId:', noteId, '| patientId:', patientId, '| files:', files.length)
+    if (!noteId) {
+      console.error('[uploadNoteFiles] noteId is falsy — aborting')
+      return
+    }
+    for (const file of files) {
+      const path = `notes/${patientId}/${noteId}/${Date.now()}-${file.name}`
+      console.log('[uploadNoteFiles] Uploading to path:', path)
+      const { data: upload, error: uploadError } = await supabase.storage
+        .from('documents')
+        .upload(path, file)
+      console.log('[uploadNoteFiles] Storage upload result:', { upload, uploadError })
+      if (uploadError) { console.error('[uploadNoteFiles] Storage upload failed:', uploadError); continue }
+      const { data: attachData, error: attachError } = await supabase.from('note_attachments').insert({
+        note_id: noteId,
+        patient_id: patientId,
+        name: file.name,
+        file_url: upload.path,
+        file_type: file.type,
+        file_size: file.size,
+      })
+      console.log('[uploadNoteFiles] note_attachments insert result:', { attachData, attachError })
+      if (attachError) console.error('[uploadNoteFiles] note_attachments insert failed:', attachError)
+    }
   }
 
   // ── Quick Note ────────────────────────────────────────────────
@@ -2031,6 +2066,7 @@ export default function PatientProfile() {
             {noteModal && (
               <NoteModal
                 modal={noteModal}
+                patientId={id}
                 patientName={patient ? `${patient.first_name} ${patient.last_name}` : ''}
                 onClose={() => setNoteModal(null)}
                 onSave={saveNote}
@@ -3188,7 +3224,7 @@ function InsuranceModal({ modal, onClose, onSave, saving }) {
   )
 }
 
-function NoteModal({ modal, patientName, onClose, onSave, onUpdate, onDelete, saving }) {
+function NoteModal({ modal, patientId, patientName, onClose, onSave, onUpdate, onDelete, saving }) {
   const isNew = modal.mode === 'new'
   const note = modal.note || null
   const [mode, setMode] = useState(isNew ? 'edit' : 'view')
@@ -3205,6 +3241,10 @@ function NoteModal({ modal, patientName, onClose, onSave, onUpdate, onDelete, sa
   })
   const [noteDate, setNoteDate] = useState(isNew ? today : ((note?.note_date || today).slice(0, 10)))
   const [noteBody, setNoteBody] = useState(isNew ? '' : (note?.body || ''))
+  const [pendingFiles, setPendingFiles] = useState([])
+  const [attachments, setAttachments] = useState([])
+  const [deletingAttachId, setDeletingAttachId] = useState(null)
+  const [previewAttach, setPreviewAttach] = useState(null)
 
   // Escape to close
   useEffect(() => {
@@ -3212,6 +3252,38 @@ function NoteModal({ modal, patientName, onClose, onSave, onUpdate, onDelete, sa
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
   }, [onClose])
+
+  useEffect(() => {
+    if (!isNew && note?.id) {
+      supabase.from('note_attachments').select('*').eq('note_id', note.id).order('created_at')
+        .then(({ data }) => setAttachments(data || []))
+    }
+  }, [note?.id])
+
+  async function openAttachment(attach) {
+    const isPDF = attach.file_type === 'application/pdf' || attach.name?.toLowerCase().endsWith('.pdf')
+    const isImage = attach.file_type?.startsWith('image/')
+    const { data } = await supabase.storage.from('documents').createSignedUrl(attach.file_url, 600)
+    if (!data?.signedUrl) return
+    if (isPDF || isImage) {
+      setPreviewAttach({ attach, signedUrl: data.signedUrl })
+    } else {
+      const link = document.createElement('a')
+      link.href = data.signedUrl
+      link.download = attach.name
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+    }
+  }
+
+  async function deleteAttachment(attach) {
+    setDeletingAttachId(attach.id)
+    await supabase.storage.from('documents').remove([attach.file_url])
+    await supabase.from('note_attachments').delete().eq('id', attach.id)
+    setAttachments(prev => prev.filter(a => a.id !== attach.id))
+    setDeletingAttachId(null)
+  }
 
   function enterEditMode() {
     setNoteTitle(note.title || '')
@@ -3224,7 +3296,7 @@ function NoteModal({ modal, patientName, onClose, onSave, onUpdate, onDelete, sa
 
   function handleSave() {
     const resolvedType = noteType === 'Other' ? (customLabel.trim() || 'Other') : noteType
-    const payload = { noteTitle, noteType: resolvedType, noteDate, noteBody }
+    const payload = { noteTitle, noteType: resolvedType, noteDate, noteBody, pendingFiles }
     if (isNew) onSave(payload)
     else onUpdate(note.id, payload)
   }
@@ -3401,64 +3473,78 @@ function NoteModal({ modal, patientName, onClose, onSave, onUpdate, onDelete, sa
   const viewColorClass = NOTE_TYPE_COLORS[viewTypeKey] || NOTE_TYPE_COLORS['General']
 
   return (
+    <>
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4"
       onClick={e => { if (e.target === e.currentTarget) onClose() }}
     >
       <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" />
 
-      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden">
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 flex-shrink-0">
-          <div className="flex items-center gap-3 min-w-0">
-            {!isNew && mode === 'view' && (
-              <span className={`tag border text-[10px] flex-shrink-0 ${viewColorClass}`}>
-                {viewTypeLabel}
+      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-2xl min-w-[520px] max-h-[90vh] flex flex-col overflow-hidden">
+
+        {/* Header — view mode */}
+        {!isNew && mode === 'view' ? (
+          <div className="px-7 pt-6 pb-0 flex-shrink-0">
+            {/* Row 1: title + close */}
+            <div className="flex items-start justify-between gap-4 mb-2">
+              <h2 className="font-heading text-2xl font-semibold text-gray-800 leading-snug">
+                {note.title || 'Note'}
+              </h2>
+              <button onClick={onClose} className="p-1.5 text-gray-400 hover:text-gray-600 transition-colors flex-shrink-0 mt-0.5">
+                <X size={18} />
+              </button>
+            </div>
+            {/* Row 2: type tag + date */}
+            <div className="flex items-center justify-between mb-3">
+              <span className={`tag border text-[10px] ${viewColorClass}`}>{viewTypeLabel}</span>
+              <span className="font-body text-xs text-gray-400">
+                {note.note_date ? format(parseISO(note.note_date.slice(0, 10)), 'MMMM d, yyyy') : ''}
               </span>
-            )}
-            <h2 className="font-heading text-xl font-semibold text-gray-800 truncate">
-              {isNew ? 'New Note' : (mode === 'view' ? (note.title || 'Note') : 'Edit Note')}
-            </h2>
+            </div>
+            {/* Row 3: action toolbar */}
+            <div className="flex items-center gap-1.5 pb-4 border-b border-gray-100">
+              <button
+                onClick={exportNotePDF}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg font-body text-xs font-medium text-gray-500 bg-gray-50 hover:bg-gray-100 border border-gray-200 transition-colors"
+                title="Export as PDF"
+              >
+                <Printer size={11} /> PDF
+              </button>
+              <button
+                onClick={exportNoteDocx}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg font-body text-xs font-medium text-gray-500 bg-gray-50 hover:bg-gray-100 border border-gray-200 transition-colors"
+                title="Export as Word"
+              >
+                <Download size={11} /> Word
+              </button>
+              <button
+                onClick={enterEditMode}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg font-body text-xs font-medium text-primary bg-primary-light hover:bg-primary/20 transition-colors"
+              >
+                <Edit3 size={11} /> Edit
+              </button>
+              <button
+                onClick={handleDelete}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg font-body text-xs font-medium text-red-500 bg-red-50 hover:bg-red-100 transition-colors"
+              >
+                <Trash2 size={11} /> Delete
+              </button>
+            </div>
           </div>
-          <div className="flex items-center gap-2 flex-shrink-0">
-            {!isNew && mode === 'view' && (
-              <>
-                <button
-                  onClick={exportNotePDF}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-body text-xs font-medium text-gray-500 bg-gray-50 hover:bg-gray-100 border border-gray-200 transition-colors"
-                  title="Export as PDF"
-                >
-                  <Printer size={12} /> Export PDF
-                </button>
-                <button
-                  onClick={exportNoteDocx}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-body text-xs font-medium text-gray-500 bg-gray-50 hover:bg-gray-100 border border-gray-200 transition-colors"
-                  title="Export as Word Doc"
-                >
-                  <Download size={12} /> Export Word
-                </button>
-                <button
-                  onClick={enterEditMode}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-body text-xs font-medium text-primary bg-primary-light hover:bg-primary/20 transition-colors"
-                >
-                  <Edit3 size={12} /> Edit
-                </button>
-                <button
-                  onClick={handleDelete}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-body text-xs font-medium text-red-500 bg-red-50 hover:bg-red-100 transition-colors"
-                >
-                  <Trash2 size={12} /> Delete
-                </button>
-              </>
-            )}
+        ) : (
+          /* Header — edit / new mode */
+          <div className="flex items-center justify-between px-7 py-4 border-b border-gray-100 flex-shrink-0">
+            <h2 className="font-heading text-xl font-semibold text-gray-800">
+              {isNew ? 'New Note' : 'Edit Note'}
+            </h2>
             <button onClick={onClose} className="p-1.5 text-gray-400 hover:text-gray-600 transition-colors">
               <X size={18} />
             </button>
           </div>
-        </div>
+        )}
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto px-6 py-5">
+        <div className="flex-1 overflow-y-auto px-7 py-6">
           {mode === 'view' ? (
             <div>
               <style>{`
@@ -3472,9 +3558,6 @@ function NoteModal({ modal, patientName, onClose, onSave, onUpdate, onDelete, sa
                 .sbha-note-body p:last-child { margin-bottom: 0; }
                 .sbha-note-body p:empty::before { content: '\\00a0'; }
               `}</style>
-              <p className="font-body text-xs text-gray-400 mb-4">
-                {note.note_date ? format(parseISO(note.note_date.slice(0, 10)), 'MMMM d, yyyy') : ''}
-              </p>
               {note.body ? (
                 <div
                   className="sbha-note-body font-body text-sm text-gray-700 leading-relaxed"
@@ -3482,6 +3565,35 @@ function NoteModal({ modal, patientName, onClose, onSave, onUpdate, onDelete, sa
                 />
               ) : (
                 <p className="font-body text-sm text-gray-400 italic">No body content.</p>
+              )}
+              {attachments.length > 0 && (
+                <div className="mt-6 pt-5 border-t border-gray-200">
+                  <p className="font-body text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Attachments</p>
+                  <div className="space-y-1">
+                    {attachments.map(a => {
+                      const isPDF = a.file_type === 'application/pdf' || a.name?.toLowerCase().endsWith('.pdf')
+                      const isImage = a.file_type?.startsWith('image/')
+                      const canPreview = isPDF || isImage
+                      return (
+                        <div key={a.id} className="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-gray-50 transition-colors group">
+                          <Paperclip size={13} className="text-gray-400 group-hover:text-primary flex-shrink-0" />
+                          <button
+                            onClick={() => openAttachment(a)}
+                            className="font-body text-sm text-gray-700 hover:text-primary flex-1 text-left truncate transition-colors"
+                          >
+                            {a.name}
+                          </button>
+                          <button
+                            onClick={() => openAttachment(a)}
+                            className="font-body text-xs font-medium text-primary hover:text-primary/70 flex-shrink-0 transition-colors"
+                          >
+                            {canPreview ? 'Open' : 'Download'}
+                          </button>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
               )}
             </div>
           ) : (
@@ -3531,13 +3643,47 @@ function NoteModal({ modal, patientName, onClose, onSave, onUpdate, onDelete, sa
                   onChange={setNoteBody}
                 />
               </Field>
+              <Field label="Attachments">
+                <div className="space-y-1.5">
+                  {!isNew && attachments.map(a => (
+                    <div key={a.id} className="flex items-center gap-2 px-3 py-2 bg-gray-50 rounded-lg">
+                      <Paperclip size={12} className="text-gray-400 flex-shrink-0" />
+                      <span className="font-body text-xs text-gray-600 flex-1 truncate">{a.name}</span>
+                      <button onClick={() => deleteAttachment(a)} disabled={deletingAttachId === a.id}
+                        className="text-red-400 hover:text-red-600 p-0.5 flex-shrink-0 disabled:opacity-50">
+                        <X size={13} />
+                      </button>
+                    </div>
+                  ))}
+                  {pendingFiles.map((f, i) => (
+                    <div key={i} className="flex items-center gap-2 px-3 py-2 bg-primary-light rounded-lg">
+                      <Paperclip size={12} className="text-primary flex-shrink-0" />
+                      <span className="font-body text-xs text-primary flex-1 truncate">{f.name}</span>
+                      <button onClick={() => setPendingFiles(prev => prev.filter((_, j) => j !== i))}
+                        className="text-primary/60 hover:text-primary p-0.5 flex-shrink-0">
+                        <X size={13} />
+                      </button>
+                    </div>
+                  ))}
+                  <label className="flex items-center gap-2 cursor-pointer px-3 py-2 border border-dashed border-gray-300 rounded-lg hover:border-primary/50 transition-colors">
+                    <Paperclip size={13} className="text-gray-400" />
+                    <span className="font-body text-xs text-gray-500">Attach files</span>
+                    <input type="file" multiple className="hidden"
+                      onChange={e => {
+                        const picked = Array.from(e.target.files || [])
+                        e.target.value = ''
+                        if (picked.length) setPendingFiles(prev => [...prev, ...picked])
+                      }} />
+                  </label>
+                </div>
+              </Field>
             </div>
           )}
         </div>
 
         {/* Footer — edit mode only */}
         {mode === 'edit' && (
-          <div className="flex items-center justify-end gap-2 px-6 py-4 border-t border-gray-100 flex-shrink-0">
+          <div className="flex items-center justify-end gap-2 px-7 py-4 border-t border-gray-100 flex-shrink-0">
             <button
               onClick={() => isNew ? onClose() : setMode('view')}
               className="btn-ghost py-2 px-4 text-sm"
@@ -3555,6 +3701,67 @@ function NoteModal({ modal, patientName, onClose, onSave, onUpdate, onDelete, sa
         )}
       </div>
     </div>
+
+    {/* Attachment preview modal */}
+    {previewAttach && (
+      <div
+        className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/60"
+        onClick={() => setPreviewAttach(null)}
+      >
+        <div
+          className="relative bg-white rounded-2xl shadow-2xl flex flex-col w-full max-w-4xl"
+          style={{ height: '90vh' }}
+          onClick={e => e.stopPropagation()}
+        >
+          {/* Preview header */}
+          <div className="flex items-center justify-between px-5 py-3 border-b border-gray-100 flex-shrink-0">
+            <p className="font-body text-sm font-medium text-gray-800 truncate min-w-0">
+              {previewAttach.attach.name}
+            </p>
+            <div className="flex items-center gap-2 flex-shrink-0 ml-4">
+              <button
+                onClick={() => {
+                  const link = document.createElement('a')
+                  link.href = previewAttach.signedUrl
+                  link.download = previewAttach.attach.name
+                  document.body.appendChild(link)
+                  link.click()
+                  document.body.removeChild(link)
+                }}
+                className="flex items-center gap-1.5 font-body text-xs font-medium text-primary hover:text-primary/80 border border-primary/30 hover:border-primary/60 rounded-lg px-3 py-1.5 transition-colors"
+              >
+                <Download size={13} /> Download
+              </button>
+              <button
+                onClick={() => setPreviewAttach(null)}
+                className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100 transition-colors"
+              >
+                <X size={18} />
+              </button>
+            </div>
+          </div>
+          {/* Preview body */}
+          <div className="flex-1 overflow-hidden rounded-b-2xl">
+            {previewAttach.attach.file_type?.startsWith('image/') ? (
+              <div className="w-full h-full flex items-center justify-center p-6 bg-gray-50">
+                <img
+                  src={previewAttach.signedUrl}
+                  alt={previewAttach.attach.name}
+                  className="max-w-full max-h-full object-contain rounded-lg"
+                />
+              </div>
+            ) : (
+              <iframe
+                src={previewAttach.signedUrl}
+                title={previewAttach.attach.name}
+                className="w-full h-full border-0"
+              />
+            )}
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   )
 }
 

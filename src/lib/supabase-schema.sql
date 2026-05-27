@@ -127,6 +127,30 @@ CREATE TABLE notes (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Note attachments table
+CREATE TABLE note_attachments (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  note_id UUID REFERENCES notes(id) ON DELETE CASCADE,
+  patient_id UUID REFERENCES patients(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  file_url TEXT,
+  file_type TEXT,
+  file_size BIGINT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Migration (run if tables already exist):
+-- CREATE TABLE IF NOT EXISTS note_attachments (
+--   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+--   note_id UUID REFERENCES notes(id) ON DELETE CASCADE,
+--   patient_id UUID REFERENCES patients(id) ON DELETE CASCADE,
+--   name TEXT NOT NULL,
+--   file_url TEXT,
+--   file_type TEXT,
+--   file_size BIGINT,
+--   created_at TIMESTAMPTZ DEFAULT NOW()
+-- );
+
 -- Emergency contacts table
 CREATE TABLE emergency_contacts (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
@@ -195,6 +219,7 @@ ALTER TABLE documents ENABLE ROW LEVEL SECURITY;
 ALTER TABLE hospitalizations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE emergency_contacts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE goals ENABLE ROW LEVEL SECURITY;
+ALTER TABLE note_attachments ENABLE ROW LEVEL SECURITY;
 
 -- RLS Policies (single authenticated user has full access)
 CREATE POLICY "Authenticated user has full access to patients"
@@ -232,6 +257,9 @@ CREATE POLICY "Authenticated user has full access to emergency_contacts"
 
 CREATE POLICY "Authenticated user has full access to goals"
   ON goals FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+CREATE POLICY "Authenticated user has full access to note_attachments"
+  ON note_attachments FOR ALL TO authenticated USING (true) WITH CHECK (true);
 
 -- Storage bucket for documents
 INSERT INTO storage.buckets (id, name, public) VALUES ('documents', 'documents', false);
