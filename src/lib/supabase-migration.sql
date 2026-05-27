@@ -5,6 +5,9 @@
 -- 0. Add client_since to patients
 ALTER TABLE patients ADD COLUMN IF NOT EXISTS client_since DATE;
 
+-- 0c. Add deleted_at to patients (soft delete)
+ALTER TABLE patients ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+
 -- 0b. Add quick_description to patients (short one-line note shown on dashboard cards)
 ALTER TABLE patients ADD COLUMN IF NOT EXISTS quick_description TEXT;
 

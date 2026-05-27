@@ -1,6 +1,7 @@
 import { NavLink, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard,
+  CalendarDays,
   Users,
   FolderOpen,
   ClipboardList,
@@ -11,6 +12,7 @@ import sbhaLogo from '../assets/sbha-logo.png'
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard', end: true },
+  { to: '/calendar', icon: CalendarDays, label: 'Calendar' },
   { to: '/intake', icon: ClipboardList, label: 'New Patient' },
   { to: '/documents', icon: FolderOpen, label: 'Documents' },
 ]

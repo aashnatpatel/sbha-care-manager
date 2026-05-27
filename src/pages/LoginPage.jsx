@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useAuth } from '../context/AuthContext'
-import { Heart } from 'lucide-react'
+import sbhaLogo from '../assets/sbha-logo.png'
 
 export default function LoginPage() {
   const { signIn } = useAuth()
@@ -25,14 +25,16 @@ export default function LoginPage() {
       <div className="w-full max-w-md">
         {/* Logo card */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-primary shadow-lg mb-4">
-            <Heart className="w-8 h-8 text-white" fill="white" />
-          </div>
+          <img
+            src={sbhaLogo}
+            alt="South Bay Health Advocates"
+            className="h-20 w-auto mx-auto mb-4"
+          />
           <h1 className="font-heading text-4xl font-semibold text-gray-800 mb-1">
-            SBHA Care Manager
+            South Bay Health Advocates
           </h1>
           <p className="font-body text-sm text-gray-400 tracking-wide">
-            Patient Advocacy Platform
+            Care Manager
           </p>
         </div>
 
@@ -92,7 +94,7 @@ export default function LoginPage() {
         </div>
 
         <p className="text-center font-body text-xs text-gray-400 mt-6">
-          SBHA — Serving patients with care & clarity
+          Personalized Care Navigation
         </p>
       </div>
     </div>

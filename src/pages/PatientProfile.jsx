@@ -181,6 +181,9 @@ export default function PatientProfile() {
   const [showActionsMenu, setShowActionsMenu] = useState(false)
   const actionsMenuRef = useRef(null)
 
+  // Delete patient confirmation
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+
   // Intake & Background panel
   const [showIntakePanel, setShowIntakePanel] = useState(false)
   const [draftReason, setDraftReason] = useState('')
@@ -448,6 +451,12 @@ export default function PatientProfile() {
     const next = patient.status === 'active' ? 'inactive' : 'active'
     const { data } = await supabase.from('patients').update({ status: next }).eq('id', id).select().single()
     if (data) setPatient(data)
+  }
+
+  async function deletePatient() {
+    await supabase.from('patients').update({ deleted_at: new Date().toISOString() }).eq('id', id)
+    setShowDeleteConfirm(false)
+    navigate('/')
   }
 
   // ── Per-item CRUD ─────────────────────────────────────────────
@@ -1046,6 +1055,13 @@ export default function PatientProfile() {
                   >
                     {patient.status === 'active' ? <ToggleLeft size={15} /> : <ToggleRight size={15} />}
                     {patient.status === 'active' ? 'Inactivate Patient' : 'Reactivate Patient'}
+                  </button>
+                  <button
+                    onClick={() => { setShowDeleteConfirm(true); setShowActionsMenu(false) }}
+                    className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm font-body text-left text-red-500 hover:bg-red-50 transition-colors"
+                  >
+                    <Trash2 size={15} />
+                    Delete Patient
                   </button>
                 </div>
               )}
@@ -2390,6 +2406,33 @@ export default function PatientProfile() {
           onClose={() => setDocPreview(null)}
           onDownload={() => downloadDocument(docPreview.doc)}
         />
+      )}
+
+      {/* ── DELETE PATIENT CONFIRMATION ── */}
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" onClick={() => setShowDeleteConfirm(false)} />
+          <div className="relative bg-white rounded-2xl shadow-xl border border-gray-100 p-6 w-full max-w-sm">
+            <h3 className="font-heading text-xl text-gray-800 mb-2">Delete Patient?</h3>
+            <p className="font-body text-sm text-gray-500 mb-6">
+              Are you sure you want to delete this patient? They can be restored from the dashboard.
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowDeleteConfirm(false)}
+                className="btn-ghost flex-1"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={deletePatient}
+                className="flex-1 px-4 py-2 bg-red-500 text-white rounded-xl font-body text-sm font-semibold hover:bg-red-600 transition-colors"
+              >
+                Delete Patient
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

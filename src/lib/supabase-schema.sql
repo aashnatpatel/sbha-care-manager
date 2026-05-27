@@ -34,7 +34,10 @@ CREATE TABLE patients (
   care_experience JSONB, -- {clarity, feels_heard, num_doctors, desires_coordination}
 
   -- Quick note shown on dashboard card and patient profile header
-  quick_description TEXT
+  quick_description TEXT,
+
+  -- Soft delete
+  deleted_at TIMESTAMPTZ
 );
 
 -- Migration (run if patients table already exists):

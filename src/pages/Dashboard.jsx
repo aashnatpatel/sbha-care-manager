@@ -50,10 +50,13 @@ export default function Dashboard() {
   const navigate = useNavigate()
   const [patients, setPatients] = useState([])
   const [inactivePatients, setInactivePatients] = useState([])
+  const [deletedPatients, setDeletedPatients] = useState([])
   const [pinnedDocs, setPinnedDocs] = useState([])
   const [viewedAppts, setViewedAppts] = useState([])
   const [loading, setLoading] = useState(true)
   const [showInactive, setShowInactive] = useState(false)
+  const [showDeleted, setShowDeleted] = useState(false)
+  const [confirmPermDelete, setConfirmPermDelete] = useState(null) // patient object | null
   const [searchQuery, setSearchQuery] = useState('')
   const [editingDesc, setEditingDesc] = useState(null) // { id, value }
   const [viewDate, setViewDate] = useState(startOfDay(new Date()))
@@ -81,7 +84,8 @@ export default function Dashboard() {
 
     if (patientsRes.error) console.error('[Dashboard] patients query error:', patientsRes.error)
     const allPatients = patientsRes.data || []
-    const active = allPatients.filter(p => p.status === 'active')
+    const nonDeleted = allPatients.filter(p => !p.deleted_at)
+    const active = nonDeleted.filter(p => p.status === 'active')
 
     // Debug: log activity dates so we can verify sorting inputs
     console.log('[Dashboard] patient activity dates:')
@@ -96,7 +100,8 @@ export default function Dashboard() {
       return bMs - aMs // descending: most recent first
     })
     setPatients(active)
-    setInactivePatients(allPatients.filter(p => p.status !== 'active'))
+    setInactivePatients(nonDeleted.filter(p => p.status !== 'active'))
+    setDeletedPatients(allPatients.filter(p => !!p.deleted_at))
     setPinnedDocs(docsRes.data || [])
     setLoading(false)
   }
@@ -183,6 +188,23 @@ export default function Dashboard() {
     if (error) console.error('[Dashboard] saveQuickDescription error:', error)
     setPatients(prev => prev.map(p => p.id === patientId ? { ...p, quick_description: value } : p))
     setEditingDesc(null)
+  }
+
+  async function restorePatient(patient) {
+    await supabase.from('patients').update({ deleted_at: null }).eq('id', patient.id)
+    setDeletedPatients(prev => prev.filter(p => p.id !== patient.id))
+    const restored = { ...patient, deleted_at: null }
+    if (restored.status === 'active') {
+      setPatients(prev => [...prev, restored])
+    } else {
+      setInactivePatients(prev => [...prev, restored])
+    }
+  }
+
+  async function permanentlyDeletePatient(patientId) {
+    await supabase.from('patients').delete().eq('id', patientId)
+    setDeletedPatients(prev => prev.filter(p => p.id !== patientId))
+    setConfirmPermDelete(null)
   }
 
   const filteredPatients = searchQuery.trim()
@@ -568,6 +590,95 @@ export default function Dashboard() {
             </div>
           )}
         </section>
+      )}
+
+      {/* Deleted Patients */}
+      {deletedPatients.length > 0 && (
+        <section className="mt-8">
+          <button
+            onClick={() => setShowDeleted(p => !p)}
+            className="flex items-center gap-2 mb-3 group"
+          >
+            {showDeleted
+              ? <ChevronUp size={15} className="text-gray-400" />
+              : <ChevronDown size={15} className="text-gray-400" />}
+            <h2 className="font-body text-sm font-semibold text-gray-400 uppercase tracking-wider group-hover:text-gray-600 transition-colors">
+              Deleted Patients
+            </h2>
+            <span className="tag bg-gray-100 text-gray-400 ml-1">{deletedPatients.length}</span>
+          </button>
+
+          {showDeleted && (
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+              {deletedPatients.map((patient) => (
+                <div
+                  key={patient.id}
+                  className="rounded-2xl bg-white border border-gray-100 border-l-[3px] border-l-red-200 shadow-sm opacity-60"
+                >
+                  <div className="p-5">
+                    <div className="flex items-start justify-between gap-2 mb-2">
+                      <h3 className="font-heading text-xl font-semibold text-gray-500 leading-tight">
+                        {patient.first_name} {patient.last_name}
+                      </h3>
+                      <span className="flex-shrink-0 inline-flex items-center px-2 py-0.5 rounded-full bg-red-50 text-red-400 font-body text-[10px] font-semibold uppercase tracking-wide border border-red-100">
+                        Deleted
+                      </span>
+                    </div>
+
+                    {patient.deleted_at && (
+                      <p className="font-body text-xs text-gray-400 mb-4 flex items-center gap-1.5">
+                        <Trash2 size={10} />
+                        Deleted {format(parseISO(patient.deleted_at), 'MMM d, yyyy')}
+                      </p>
+                    )}
+
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => restorePatient(patient)}
+                        className="flex-1 px-3 py-1.5 rounded-xl border border-primary/30 text-primary bg-primary-light font-body text-xs font-semibold hover:bg-primary hover:text-white transition-all"
+                      >
+                        Restore
+                      </button>
+                      <button
+                        onClick={() => setConfirmPermDelete(patient)}
+                        className="flex-1 px-3 py-1.5 rounded-xl border border-red-200 text-red-500 bg-red-50 font-body text-xs font-semibold hover:bg-red-500 hover:text-white transition-all"
+                      >
+                        Permanently Delete
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* Permanent Delete Confirmation */}
+      {confirmPermDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" onClick={() => setConfirmPermDelete(null)} />
+          <div className="relative bg-white rounded-2xl shadow-xl border border-gray-100 p-6 w-full max-w-sm">
+            <h3 className="font-heading text-xl text-gray-800 mb-2">Permanently Delete?</h3>
+            <p className="font-body text-sm text-gray-500 mb-6">
+              This will permanently delete <strong>{confirmPermDelete.first_name} {confirmPermDelete.last_name}</strong> and all their data. This cannot be undone.
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setConfirmPermDelete(null)}
+                className="btn-ghost flex-1"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => permanentlyDeletePatient(confirmPermDelete.id)}
+                className="flex-1 px-4 py-2 bg-red-500 text-white rounded-xl font-body text-sm font-semibold hover:bg-red-600 transition-colors"
+              >
+                Delete Forever
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Add Event Modal */}

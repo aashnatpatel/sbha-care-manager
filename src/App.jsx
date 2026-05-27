@@ -6,6 +6,7 @@ import Dashboard from './pages/Dashboard'
 import PatientProfile from './pages/PatientProfile'
 import Documents from './pages/Documents'
 import IntakeForm from './pages/IntakeForm'
+import CalendarPage from './pages/Calendar'
 
 function ProtectedRoute({ children }) {
   const { session, loading } = useAuth()
@@ -49,6 +50,7 @@ export default function App() {
             <Layout>
               <Routes>
                 <Route index element={<Dashboard />} />
+                <Route path="calendar" element={<CalendarPage />} />
                 <Route path="patients/:id" element={<PatientProfile />} />
                 <Route path="intake" element={<IntakeForm />} />
                 <Route path="documents" element={<Documents />} />
