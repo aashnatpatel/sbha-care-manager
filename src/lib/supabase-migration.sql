@@ -5,6 +5,9 @@
 -- 0. Add client_since to patients
 ALTER TABLE patients ADD COLUMN IF NOT EXISTS client_since DATE;
 
+-- 0b. Add quick_description to patients (short one-line note shown on dashboard cards)
+ALTER TABLE patients ADD COLUMN IF NOT EXISTS quick_description TEXT;
+
 -- 1. Update notes table to new schema
 ALTER TABLE notes ADD COLUMN IF NOT EXISTS title TEXT;
 ALTER TABLE notes ADD COLUMN IF NOT EXISTS note_type TEXT;

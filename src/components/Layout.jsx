@@ -11,7 +11,7 @@ import sbhaLogo from '../assets/sbha-logo.png'
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard', end: true },
-  { to: '/intake', icon: ClipboardList, label: 'New Intake' },
+  { to: '/intake', icon: ClipboardList, label: 'New Patient' },
   { to: '/documents', icon: FolderOpen, label: 'Documents' },
 ]
 
@@ -29,8 +29,8 @@ export default function Layout({ children }) {
       {/* Sidebar */}
       <aside className="w-60 flex-shrink-0 bg-white border-r border-gray-100 flex flex-col">
         {/* Logo */}
-        <div className="px-6 py-5 border-b border-gray-100 flex items-center justify-center">
-          <img src={sbhaLogo} alt="SBHA" className="h-12 w-auto object-contain" />
+        <div className="px-6 py-7 border-b border-gray-100 flex items-center justify-center">
+          <img src={sbhaLogo} alt="SBHA" className="h-16 w-auto object-contain" />
         </div>
 
         {/* Nav */}
