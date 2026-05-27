@@ -5,7 +5,7 @@ import { format, isToday, parseISO, isAfter, startOfDay, addDays, isSameDay } fr
 import {
   Pin, Calendar, FileText, Plus, Clock,
   ChevronRight, ChevronLeft, Activity, ChevronDown, ChevronUp,
-  Search, User, X, Edit3, Trash2, ExternalLink,
+  Search, User, X, Edit3, Trash2, ExternalLink, CalendarPlus,
 } from 'lucide-react'
 
 const APPT_TYPES = ['Doctor Appointment', 'Patient Meeting', 'Family Meeting', 'SBHA General Event', 'Other']
@@ -346,42 +346,56 @@ export default function Dashboard() {
               No appointments scheduled for {isViewingToday ? 'today' : format(viewDate, 'MMMM d')}
             </p>
           </div>
-        ) : (
-          <div className="space-y-2">
-            {viewedAppts.map((appt) => (
-              <div
-                key={appt.id}
-                className="card flex items-center gap-4 py-3.5 cursor-pointer hover:shadow-card-hover transition-shadow"
-                onClick={() => setApptModal(appt)}
-              >
-                <div className="flex flex-col items-center w-14 flex-shrink-0">
-                  <span className="font-body text-sm font-semibold text-primary leading-none">
-                    {format(parseApptDateLocal(appt.appointment_date), 'h:mm')}
-                  </span>
-                  <span className="font-body text-[10px] text-gray-400 mt-0.5">
-                    {format(parseApptDateLocal(appt.appointment_date), 'a')}
-                  </span>
+        ) : (() => {
+          const blocks = [
+            { label: 'Morning',   appts: viewedAppts.filter(a => parseApptDateLocal(a.appointment_date).getHours() < 12) },
+            { label: 'Afternoon', appts: viewedAppts.filter(a => { const h = parseApptDateLocal(a.appointment_date).getHours(); return h >= 12 && h < 17 }) },
+            { label: 'Evening',   appts: viewedAppts.filter(a => parseApptDateLocal(a.appointment_date).getHours() >= 17) },
+          ].filter(b => b.appts.length > 0)
+          return (
+            <div className="space-y-4">
+              {blocks.map(({ label, appts }) => (
+                <div key={label}>
+                  <p className="font-body text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1.5 px-0.5">{label}</p>
+                  <div className="space-y-2">
+                    {appts.map((appt) => (
+                      <div
+                        key={appt.id}
+                        className="card flex items-center gap-4 py-3.5 cursor-pointer hover:shadow-card-hover transition-shadow"
+                        onClick={() => setApptModal(appt)}
+                      >
+                        <div className="flex flex-col items-center w-14 flex-shrink-0">
+                          <span className="font-body text-sm font-semibold text-primary leading-none">
+                            {format(parseApptDateLocal(appt.appointment_date), 'h:mm')}
+                          </span>
+                          <span className="font-body text-[10px] text-gray-400 mt-0.5">
+                            {format(parseApptDateLocal(appt.appointment_date), 'a')}
+                          </span>
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="font-body text-sm font-semibold text-gray-700 truncate">{appt.title}</p>
+                          {appt.patients ? (
+                            <p className="font-body text-xs text-gray-400 truncate">
+                              <User size={10} className="inline mr-1 mb-0.5" />
+                              {appt.patients.first_name} {appt.patients.last_name}
+                            </p>
+                          ) : appt.location ? (
+                            <p className="font-body text-xs text-gray-400 truncate">{appt.location}</p>
+                          ) : null}
+                        </div>
+                        {appt.appointment_type && (
+                          <span className={`tag border text-[10px] flex-shrink-0 ${APPT_TYPE_COLORS[appt.appointment_type] || APPT_TYPE_COLORS['Other']}`}>
+                            {appt.appointment_type}
+                          </span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
                 </div>
-                <div className="flex-1 min-w-0">
-                  <p className="font-body text-sm font-semibold text-gray-700 truncate">{appt.title}</p>
-                  {appt.patients ? (
-                    <p className="font-body text-xs text-gray-400 truncate">
-                      <User size={10} className="inline mr-1 mb-0.5" />
-                      {appt.patients.first_name} {appt.patients.last_name}
-                    </p>
-                  ) : appt.location ? (
-                    <p className="font-body text-xs text-gray-400 truncate">{appt.location}</p>
-                  ) : null}
-                </div>
-                {appt.appointment_type && (
-                  <span className={`tag border text-[10px] flex-shrink-0 ${APPT_TYPE_COLORS[appt.appointment_type] || APPT_TYPE_COLORS['Other']}`}>
-                    {appt.appointment_type}
-                  </span>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
+              ))}
+            </div>
+          )
+        })()}
       </section>
 
       {/* Active Patients */}
@@ -709,6 +723,46 @@ export default function Dashboard() {
   )
 }
 
+// ── ICS generator ──────────────────────────────────────────────────────────────
+function generateICS(appt) {
+  const start = parseISO(appt.appointment_date.slice(0, 16))
+  const end   = new Date(start.getTime() + 60 * 60 * 1000)
+  const pad   = n => String(n).padStart(2, '0')
+  const fmtDT = d => `${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}T${pad(d.getHours())}${pad(d.getMinutes())}00`
+  const esc   = s => (s || '').replace(/\\/g, '\\\\').replace(/,/g, '\\,').replace(/;/g, '\\;').replace(/\n/g, '\\n')
+
+  const descParts = []
+  if (appt.patients) descParts.push(`Patient: ${appt.patients.first_name} ${appt.patients.last_name}`)
+  if (appt.notes)    descParts.push(appt.notes)
+
+  const lines = [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//South Bay Health Advocates//Care Manager//EN',
+    'CALSCALE:GREGORIAN',
+    'METHOD:PUBLISH',
+    'BEGIN:VEVENT',
+    `UID:${Date.now()}-${Math.random().toString(36).slice(2)}@sbha`,
+    `DTSTAMP:${fmtDT(new Date())}`,
+    `DTSTART:${fmtDT(start)}`,
+    `DTEND:${fmtDT(end)}`,
+    `SUMMARY:${esc(appt.title || 'Appointment')}`,
+    appt.location ? `LOCATION:${esc(appt.location)}` : null,
+    descParts.length ? `DESCRIPTION:${esc(descParts.join('\n'))}` : null,
+    'ORGANIZER;CN=South Bay Health Advocates:mailto:noreply@sbha.org',
+    'END:VEVENT',
+    'END:VCALENDAR',
+  ].filter(Boolean).join('\r\n')
+
+  const blob = new Blob([lines], { type: 'text/calendar;charset=utf-8' })
+  const url  = URL.createObjectURL(blob)
+  const a    = document.createElement('a')
+  a.href     = url
+  a.download = `${(appt.title || 'Appointment').replace(/[^a-z0-9]/gi, '-').replace(/-+/g, '-')}.ics`
+  a.click()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
 // ── ApptDetailModal ────────────────────────────────────────────────────────────
 function ApptDetailModal({ appt, onClose, onUpdate, onDelete, onViewPatient, saving, patients }) {
   const [mode, setMode] = useState('view')
@@ -743,7 +797,7 @@ function ApptDetailModal({ appt, onClose, onUpdate, onDelete, onViewPatient, sav
       onClick={e => { if (e.target === e.currentTarget) onClose() }}
     >
       <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" />
-      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-lg flex flex-col overflow-hidden">
+      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-[560px] flex flex-col overflow-hidden">
 
         {mode === 'view' ? (
           <>
@@ -830,12 +884,12 @@ function ApptDetailModal({ appt, onClose, onUpdate, onDelete, onViewPatient, sav
             </div>
 
             {/* View footer */}
-            <div className="flex items-center justify-between px-7 py-4 border-t border-gray-100 flex-shrink-0">
-              <div>
+            <div className="flex items-center gap-3 px-7 py-5 border-t border-gray-100 flex-shrink-0">
+              <div className="flex-1">
                 {appt.patient_id && (
                   <button
                     onClick={() => onViewPatient(appt.patient_id)}
-                    className="btn-primary flex items-center gap-2 py-2 px-4 text-sm"
+                    className="btn-primary flex items-center gap-2 py-2.5 px-5 text-sm"
                   >
                     <ExternalLink size={13} />
                     View Patient Profile
@@ -843,8 +897,16 @@ function ApptDetailModal({ appt, onClose, onUpdate, onDelete, onViewPatient, sav
                 )}
               </div>
               <button
+                onClick={() => generateICS(appt)}
+                className="btn-ghost flex items-center gap-2 py-2.5 px-5 text-sm flex-shrink-0"
+                title="Sync to Calendar"
+              >
+                <CalendarPlus size={13} />
+                Sync to Calendar
+              </button>
+              <button
                 onClick={onClose}
-                className="btn-ghost py-2 px-4 text-sm"
+                className="btn-ghost py-2.5 px-5 text-sm flex-shrink-0"
               >
                 Close
               </button>

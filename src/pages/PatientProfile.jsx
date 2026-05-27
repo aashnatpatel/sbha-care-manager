@@ -214,6 +214,9 @@ export default function PatientProfile() {
   // Documents
   const [uploadingDoc, setUploadingDoc] = useState(false)
   const [docPreview, setDocPreview] = useState(null) // null | { doc, url }
+  const [renamingDoc, setRenamingDoc] = useState(null) // null | { id, name }
+  const [reassigningDoc, setReassigningDoc] = useState(null) // null | doc object
+  const [activePatients, setActivePatients] = useState([])
   const fileInputRef = useRef(null)
 
   useEffect(() => { loadPatient() }, [id])
@@ -242,7 +245,7 @@ export default function PatientProfile() {
 
   async function loadPatient() {
     setLoading(true)
-    const [p, c, m, pr, ct, ec, gl, ap, hosp, n, nd, docs, ins] = await Promise.all([
+    const [p, c, m, pr, ct, ec, gl, ap, hosp, n, nd, docs, ins, pts] = await Promise.all([
       supabase.from('patients').select('*').eq('id', id).single(),
       supabase.from('conditions').select('*').eq('patient_id', id).order('created_at'),
       supabase.from('medications').select('*').eq('patient_id', id).order('created_at'),
@@ -256,6 +259,7 @@ export default function PatientProfile() {
       supabase.from('notes').select('*').eq('patient_id', id).not('deleted_at', 'is', null).order('deleted_at', { ascending: false }),
       supabase.from('documents').select('*').eq('patient_id', id).order('created_at', { ascending: false }),
       supabase.from('insurances').select('*').eq('patient_id', id).order('created_at'),
+      supabase.from('patients').select('id, first_name, last_name').eq('status', 'active').is('deleted_at', null).order('first_name'),
     ])
     setPatient(p.data)
     setConditions(c.data || [])
@@ -296,6 +300,7 @@ export default function PatientProfile() {
     setNotes(n.data || [])
     setDeletedNotes(nd.data || [])
     setDocuments(docs.data || [])
+    setActivePatients(pts.data || [])
 
     // Auto-migrate legacy insurance fields from patients table
     let insData = ins.data || []
@@ -707,6 +712,20 @@ export default function PatientProfile() {
     await supabase.storage.from('documents').remove([doc.file_url])
     await supabase.from('documents').delete().eq('id', doc.id)
     setDocuments(prev => prev.filter(d => d.id !== doc.id))
+  }
+
+  async function renameDocumentFn(docId, newName) {
+    if (!newName.trim()) return
+    await supabase.from('documents').update({ name: newName.trim() }).eq('id', docId)
+    setDocuments(prev => prev.map(d => d.id === docId ? { ...d, name: newName.trim() } : d))
+    setRenamingDoc(null)
+  }
+
+  async function reassignDocument(docId, patientId) {
+    await supabase.from('documents').update({ patient_id: patientId || null }).eq('id', docId)
+    // Either unassigned or moved to another patient — remove from this profile's list
+    setDocuments(prev => prev.filter(d => d.id !== docId))
+    setReassigningDoc(null)
   }
 
   function exportProfilePDF() {
@@ -1322,7 +1341,7 @@ export default function PatientProfile() {
             ) : (
               <div className="space-y-2">
                 {documents.map(doc => (
-                  <div key={doc.id} className="flex items-center justify-between gap-2 bg-gray-50 rounded-xl px-3 py-2.5">
+                  <div key={doc.id} className="group flex items-center justify-between gap-2 bg-gray-50 rounded-xl px-3 py-2.5 hover:bg-gray-100 transition-colors">
                     <div className="flex items-center gap-2 min-w-0">
                       <FileText size={13} className="text-primary flex-shrink-0" />
                       <div className="min-w-0">
@@ -1335,12 +1354,68 @@ export default function PatientProfile() {
                         <p className="font-body text-[10px] text-gray-400">{format(parseISO(doc.created_at), 'MMM d, yyyy')}</p>
                       </div>
                     </div>
-                    <div className="flex items-center gap-1 flex-shrink-0">
-                      <button onClick={() => downloadDocument(doc)} className="p-1 text-gray-300 hover:text-primary transition-colors"><Download size={13} /></button>
-                      <button onClick={() => deleteDocument(doc)} className="p-1 text-gray-300 hover:text-red-400 transition-colors"><Trash2 size={13} /></button>
+                    <div className="flex items-center gap-0.5 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button onClick={() => setRenamingDoc({ id: doc.id, name: doc.name })} title="Rename"
+                        className="p-1 text-gray-300 hover:text-gray-600 transition-colors"><Edit3 size={12} /></button>
+                      <button onClick={() => setReassigningDoc(doc)} title="Reassign"
+                        className="p-1 text-gray-300 hover:text-primary transition-colors"><User size={12} /></button>
+                      <button onClick={() => downloadDocument(doc)} title="Download"
+                        className="p-1 text-gray-300 hover:text-primary transition-colors"><Download size={13} /></button>
+                      <button onClick={() => deleteDocument(doc)} title="Delete"
+                        className="p-1 text-gray-300 hover:text-red-400 transition-colors"><Trash2 size={13} /></button>
                     </div>
                   </div>
                 ))}
+              </div>
+            )}
+
+            {/* Rename Modal */}
+            {renamingDoc && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+                <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" onClick={() => setRenamingDoc(null)} />
+                <div className="relative bg-white rounded-2xl shadow-xl p-6 w-full max-w-sm">
+                  <h3 className="font-heading text-xl text-gray-800 mb-4">Rename Document</h3>
+                  <input
+                    className="input w-full"
+                    value={renamingDoc.name}
+                    onChange={e => setRenamingDoc(d => ({ ...d, name: e.target.value }))}
+                    onKeyDown={e => { if (e.key === 'Enter') renameDocumentFn(renamingDoc.id, renamingDoc.name) }}
+                    autoFocus
+                  />
+                  <div className="flex gap-2 mt-4">
+                    <button onClick={() => setRenamingDoc(null)} className="btn-ghost flex-1 py-2 text-sm">Cancel</button>
+                    <button onClick={() => renameDocumentFn(renamingDoc.id, renamingDoc.name)} className="btn-primary flex-1 py-2 text-sm">Save</button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Reassign Modal */}
+            {reassigningDoc && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+                <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" onClick={() => setReassigningDoc(null)} />
+                <div className="relative bg-white rounded-2xl shadow-xl p-6 w-full max-w-sm">
+                  <h3 className="font-heading text-xl text-gray-800 mb-1">Reassign Document</h3>
+                  <p className="font-body text-xs text-gray-400 mb-4 truncate">{reassigningDoc.name}</p>
+                  <div className="space-y-1 max-h-64 overflow-y-auto -mx-1 px-1">
+                    <button
+                      onClick={() => reassignDocument(reassigningDoc.id, null)}
+                      className="w-full text-left px-3 py-2 rounded-lg font-body text-sm text-gray-500 hover:bg-gray-50 transition-colors"
+                    >
+                      Unassign (move to general documents)
+                    </button>
+                    {activePatients.filter(p => p.id !== id).map(p => (
+                      <button
+                        key={p.id}
+                        onClick={() => reassignDocument(reassigningDoc.id, p.id)}
+                        className="w-full text-left px-3 py-2 rounded-lg font-body text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                      >
+                        {p.first_name} {p.last_name}
+                      </button>
+                    ))}
+                  </div>
+                  <button onClick={() => setReassigningDoc(null)} className="btn-ghost w-full mt-3 py-2 text-sm">Cancel</button>
+                </div>
               </div>
             )}
           </SectionCard>

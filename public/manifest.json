@@ -1,0 +1,23 @@
+{
+  "name": "SBHA Care Manager",
+  "short_name": "SBHA",
+  "description": "South Bay Health Advocates Patient Care Manager",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#4F7EE0",
+  "icons": [
+    {
+      "src": "/sbha-logo.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/sbha-logo.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

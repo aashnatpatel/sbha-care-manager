@@ -34,6 +34,7 @@ export default function IntakeForm() {
   const navigate = useNavigate()
   const [step, setStep] = useState(0)
   const [saving, setSaving] = useState(false)
+  const [showErrors, setShowErrors] = useState(false)
 
   // Step 0: Basic Info
   const [basicInfo, setBasicInfo] = useState({
@@ -255,6 +256,17 @@ export default function IntakeForm() {
     return true
   }
 
+  function tryNavigate(target) {
+    // Always allow backward navigation
+    if (target <= step) { setStep(target); return }
+    // Forward from step 0 requires first + last name
+    if (step === 0 && (!basicInfo.first_name.trim() || !basicInfo.last_name.trim())) {
+      setShowErrors(true)
+      return
+    }
+    setStep(target)
+  }
+
   return (
     <div className="p-8 max-w-3xl">
       {/* Header */}
@@ -273,13 +285,13 @@ export default function IntakeForm() {
         {STEPS.map((s, i) => (
           <div key={i} className="flex items-center gap-1 flex-shrink-0">
             <button
-              onClick={() => i < step && setStep(i)}
+              onClick={() => tryNavigate(i)}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-body font-medium transition-all ${
                 i === step
                   ? 'bg-primary text-white'
                   : i < step
-                  ? 'bg-primary-light text-primary cursor-pointer hover:bg-primary/20'
-                  : 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                  ? 'bg-primary-light text-primary hover:bg-primary/20'
+                  : 'bg-gray-100 text-gray-400 hover:bg-gray-200 hover:text-gray-600'
               }`}
             >
               {i < step && <Check size={11} />}
@@ -301,15 +313,27 @@ export default function IntakeForm() {
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="label">First Name *</label>
-                <input className="input" value={basicInfo.first_name}
+                <input
+                  className={`input ${showErrors && !basicInfo.first_name.trim() ? 'border-red-300 focus:border-red-400 focus:ring-red-100' : ''}`}
+                  value={basicInfo.first_name}
                   onChange={e => setBasicInfo(p => ({ ...p, first_name: e.target.value }))}
-                  placeholder="Jane" autoFocus />
+                  placeholder="Jane" autoFocus
+                />
+                {showErrors && !basicInfo.first_name.trim() && (
+                  <p className="font-body text-xs text-red-500 mt-1">First name is required</p>
+                )}
               </div>
               <div>
                 <label className="label">Last Name *</label>
-                <input className="input" value={basicInfo.last_name}
+                <input
+                  className={`input ${showErrors && !basicInfo.last_name.trim() ? 'border-red-300 focus:border-red-400 focus:ring-red-100' : ''}`}
+                  value={basicInfo.last_name}
                   onChange={e => setBasicInfo(p => ({ ...p, last_name: e.target.value }))}
-                  placeholder="Smith" />
+                  placeholder="Smith"
+                />
+                {showErrors && !basicInfo.last_name.trim() && (
+                  <p className="font-body text-xs text-red-500 mt-1">Last name is required</p>
+                )}
               </div>
             </div>
             <div className="grid grid-cols-2 gap-4">
@@ -832,9 +856,8 @@ export default function IntakeForm() {
           {step < STEPS.length - 1 ? (
             <button
               type="button"
-              onClick={() => setStep(s => s + 1)}
-              disabled={!isStepValid()}
-              className="btn-primary flex items-center gap-2 py-2.5 px-6 disabled:opacity-50"
+              onClick={() => tryNavigate(step + 1)}
+              className="btn-primary flex items-center gap-2 py-2.5 px-6"
             >
               Continue <ChevronRight size={15} />
             </button>
