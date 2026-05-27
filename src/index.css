@@ -40,8 +40,8 @@
   }
 
   .card:hover {
-    border-left-color: #4F7EE0;
-    box-shadow: 0 4px 20px 0 rgba(79,126,224,0.15);
+    border-left-color: #A671AA;
+    box-shadow: 0 4px 20px 0 rgba(166,113,170,0.15);
   }
 
   .input {

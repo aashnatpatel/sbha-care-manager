@@ -7,6 +7,7 @@ export default {
         primary: '#4F7EE0',
         'primary-light': '#EEF2FB',
         mauve: '#A671AA',
+        'mauve-soft': '#B88BBE',
         'mauve-light': '#F5EFF6',
       },
       fontFamily: {

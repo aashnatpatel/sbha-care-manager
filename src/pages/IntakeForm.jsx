@@ -104,9 +104,6 @@ export default function IntakeForm() {
           f === 'Other' && overwhelmingOtherText.trim() ? `Other: ${overwhelmingOtherText.trim()}` : f
         ),
         care_experience: careExp,
-        insurance_type: insuranceType,
-        insurance_provider: insuranceProvider,
-        billing_concerns: billingConcerns,
       }).select().single()
 
       if (patientError) throw patientError
@@ -129,6 +126,17 @@ export default function IntakeForm() {
         await supabase.from('goals').insert(
           validGoals.map(g => ({ patient_id: patientId, goal_text: g }))
         )
+      }
+
+      // Insert insurance into insurances table
+      if (insuranceType) {
+        await supabase.from('insurances').insert({
+          patient_id: patientId,
+          insurance_type: insuranceType,
+          insurance_provider: insuranceProvider || null,
+          billing_concerns: billingConcerns || null,
+          is_primary: true,
+        })
       }
 
       // Insert conditions

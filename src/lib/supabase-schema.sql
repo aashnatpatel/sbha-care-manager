@@ -11,6 +11,7 @@ CREATE TABLE patients (
   first_name TEXT NOT NULL,
   last_name TEXT NOT NULL,
   dob DATE,
+  client_since DATE,
   address TEXT,
   phone TEXT,
   email TEXT,
@@ -74,17 +75,31 @@ CREATE TABLE caretakers (
   role TEXT, -- home nurse, family member, etc.
   phone TEXT,
   email TEXT,
-  schedule_days TEXT[], -- ['Mon', 'Wed', 'Fri']
-  schedule_time TEXT,
+  schedule_days TEXT[], -- legacy, use caretaker_schedules
+  schedule_time TEXT,   -- legacy, use caretaker_schedules
   notes TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Caretaker schedules table (replaces schedule_days/schedule_time)
+CREATE TABLE caretaker_schedules (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  caretaker_id UUID REFERENCES caretakers(id) ON DELETE CASCADE,
+  day TEXT NOT NULL, -- 'Mon', 'Tue', etc.
+  start_time TEXT,
+  end_time TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+ALTER TABLE caretaker_schedules ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Authenticated user has full access to caretaker_schedules"
+  ON caretaker_schedules FOR ALL TO authenticated USING (true) WITH CHECK (true);
 
 -- Appointments table
 CREATE TABLE appointments (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   patient_id UUID REFERENCES patients(id) ON DELETE CASCADE,
   title TEXT NOT NULL,
+  appointment_type TEXT,
   provider TEXT,
   location TEXT,
   appointment_date TIMESTAMPTZ NOT NULL,
@@ -128,6 +143,17 @@ CREATE TABLE goals (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Insurances table
+CREATE TABLE insurances (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  patient_id UUID REFERENCES patients(id) ON DELETE CASCADE,
+  insurance_type TEXT,
+  insurance_provider TEXT,
+  billing_concerns TEXT,
+  is_primary BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- Documents table
 CREATE TABLE documents (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
@@ -158,6 +184,7 @@ ALTER TABLE providers ENABLE ROW LEVEL SECURITY;
 ALTER TABLE caretakers ENABLE ROW LEVEL SECURITY;
 ALTER TABLE appointments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE notes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE insurances ENABLE ROW LEVEL SECURITY;
 ALTER TABLE documents ENABLE ROW LEVEL SECURITY;
 ALTER TABLE hospitalizations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE emergency_contacts ENABLE ROW LEVEL SECURITY;
@@ -184,6 +211,9 @@ CREATE POLICY "Authenticated user has full access to appointments"
 
 CREATE POLICY "Authenticated user has full access to notes"
   ON notes FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+CREATE POLICY "Authenticated user has full access to insurances"
+  ON insurances FOR ALL TO authenticated USING (true) WITH CHECK (true);
 
 CREATE POLICY "Authenticated user has full access to documents"
   ON documents FOR ALL TO authenticated USING (true) WITH CHECK (true);

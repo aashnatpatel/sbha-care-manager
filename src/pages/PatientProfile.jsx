@@ -1,13 +1,15 @@
 import { useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
-import { format, parseISO, differenceInYears, isAfter, startOfDay } from 'date-fns'
+import { format, parseISO, differenceInYears, isAfter, startOfDay, startOfMonth, endOfMonth, eachDayOfInterval, getDay, addMonths, subMonths } from 'date-fns'
 import {
   ArrowLeft, Phone, Mail, MapPin, User, Pill, Activity, Stethoscope,
   Users, Calendar, FileText, Plus, Sparkles, Trash2, Edit3, Clock,
-  Shield, X, Check, ChevronDown, ChevronUp, Target, Paperclip,
-  Download, List, ListOrdered, ToggleLeft, ToggleRight, Search, CheckCircle, MoreVertical,
+  Shield, X, Check, ChevronDown, ChevronUp, ChevronRight, ChevronLeft, Target, Paperclip,
+  Download, List, ListOrdered, ToggleLeft, ToggleRight, Search, CheckCircle, MoreVertical, SlidersHorizontal, ClipboardList, Printer,
 } from 'lucide-react'
+import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, LevelFormat } from 'docx'
+import { saveAs } from 'file-saver'
 import { useEditor, EditorContent } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import { Underline } from '@tiptap/extension-underline'
@@ -16,6 +18,33 @@ import { TextStyle } from '@tiptap/extension-text-style'
 import { Typography } from '@tiptap/extension-typography'
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+function formatTime(t) {
+  if (!t) return ''
+  if (/[ap]m/i.test(t)) return t // already formatted
+  const [h, m] = t.split(':').map(Number)
+  if (isNaN(h)) return t
+  const ampm = h >= 12 ? 'PM' : 'AM'
+  const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h
+  return `${h12}:${(m || 0).toString().padStart(2, '0')} ${ampm}`
+}
+function scheduleRowsToBlocks(rows) {
+  if (!rows || rows.length === 0) return [{ tempId: '0', days: [], start_time: '', end_time: '' }]
+  const groups = {}
+  for (const row of rows) {
+    const key = `${row.start_time ?? ''}|${row.end_time ?? ''}`
+    if (!groups[key]) groups[key] = { start_time: row.start_time || '', end_time: row.end_time || '', days: [] }
+    groups[key].days.push(row.day)
+  }
+  return Object.values(groups).map((g, i) => ({
+    tempId: String(i),
+    days: g.days.sort((a, b) => DAYS.indexOf(a) - DAYS.indexOf(b)),
+    start_time: g.start_time,
+    end_time: g.end_time,
+  }))
+}
+function groupScheduleRows(rows) {
+  return scheduleRowsToBlocks(rows) // same grouping logic, used for display
+}
 const NOTE_TYPES = ['Call Summary', 'Appointment Note', 'Action Item', 'Family Communication', 'General', 'Other']
 const OVERWHELMING_OPTIONS = [
   'Understanding medical information',
@@ -33,6 +62,13 @@ const CARE_EXP_QUESTIONS = [
   { key: 'num_doctors',           label: 'How many doctors are they seeing?',          options: ['1–2', '3–4', '5+'] },
   { key: 'desires_coordination',  label: 'Do they want better care coordination?',     options: ['Yes', 'No'] },
 ]
+const APPT_TYPE_COLORS = {
+  'Doctor Appointment': 'bg-blue-50 text-blue-600 border-blue-100',
+  'Patient Meeting':    'bg-purple-50 text-purple-600 border-purple-100',
+  'Family Meeting':     'bg-amber-50 text-amber-600 border-amber-100',
+  'SBHA General Event': 'bg-green-50 text-green-600 border-green-100',
+  'Other':              'bg-pink-50 text-pink-600 border-pink-100',
+}
 const NOTE_TYPE_COLORS = {
   'Call Summary':         'bg-blue-50 text-blue-600 border-blue-100',
   'Appointment Note':     'bg-purple-50 text-purple-600 border-purple-100',
@@ -41,7 +77,26 @@ const NOTE_TYPE_COLORS = {
   'General':              'bg-gray-100 text-gray-500 border-gray-200',
   'Other':                'bg-pink-50 text-pink-600 border-pink-100',
 }
+// CSS color values for note type badges in the print export
+const NOTE_TYPE_PRINT = {
+  'Call Summary':         { bg: '#eff6ff', fg: '#2563eb', border: '#bfdbfe' },
+  'Appointment Note':     { bg: '#faf5ff', fg: '#9333ea', border: '#e9d5ff' },
+  'Action Item':          { bg: '#fffbeb', fg: '#d97706', border: '#fde68a' },
+  'Family Communication': { bg: '#f0fdf4', fg: '#16a34a', border: '#bbf7d0' },
+  'General':              { bg: '#f3f4f6', fg: '#6b7280', border: '#e5e7eb' },
+  'Other':                { bg: '#fdf2f8', fg: '#db2777', border: '#fbcfe8' },
+}
+function badgeBg(type)     { return (NOTE_TYPE_PRINT[type] || NOTE_TYPE_PRINT['Other']).bg }
+function badgeFg(type)     { return (NOTE_TYPE_PRINT[type] || NOTE_TYPE_PRINT['Other']).fg }
+function badgeBorder(type) { return (NOTE_TYPE_PRINT[type] || NOTE_TYPE_PRINT['Other']).border }
 const today = format(new Date(), 'yyyy-MM-dd')
+function getDocFileCategory(doc) {
+  const mime = (doc.file_type || '').toLowerCase()
+  const name = (doc.name || '').toLowerCase()
+  if (mime === 'application/pdf' || name.endsWith('.pdf')) return 'pdf'
+  if (mime.startsWith('image/') || /\.(jpg|jpeg|png|gif|webp)$/.test(name)) return 'image'
+  return 'other'
+}
 function stripHtml(html) { return (html || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() }
 function getBodySnippet(body, query) {
   const text = stripHtml(body || '')
@@ -66,10 +121,12 @@ export default function PatientProfile() {
   const [medications, setMedications] = useState([])
   const [providers, setProviders] = useState([])
   const [caretakers, setCaretakers] = useState([])
+  const [caretakerSchedules, setCaretakerSchedules] = useState({}) // { [caretakerId]: [{id,day,start_time,end_time}] }
   const [emergencyContacts, setEmergencyContacts] = useState([])
   const [goals, setGoals] = useState([])
   const [appointments, setAppointments] = useState([])
   const [hospitalizations, setHospitalizations] = useState([])
+  const [insurances, setInsurances] = useState([])
   const [notes, setNotes] = useState([])
   const [documents, setDocuments] = useState([])
   const [loading, setLoading] = useState(true)
@@ -78,11 +135,20 @@ export default function PatientProfile() {
   const [aiSummary, setAiSummary] = useState('')
   const [aiLoading, setAiLoading] = useState(false)
 
-  // Section editing (demographics / emergency / insurance / goals)
+  // Collapsible cards
+  const [collapsedCards, setCollapsedCards] = useState({})
+  function toggleCard(key) {
+    setCollapsedCards(prev => ({ ...prev, [key]: !prev[key] }))
+  }
+
+  // Section editing (demographics)
   const [editingSection, setEditingSection] = useState(null)
   const [draftPatient, setDraftPatient] = useState({})
   const [saving, setSaving] = useState(false)
-  const [insuranceOtherMode, setInsuranceOtherMode] = useState(false)
+
+  // Insurance modal
+  const [insuranceModal, setInsuranceModal] = useState(null) // null | { mode: 'new'|'edit', draft, id? }
+  const [savingInsurance, setSavingInsurance] = useState(false)
 
   // Inline item editing
   const [editingItem, setEditingItem] = useState(null) // { type, id, draft }
@@ -102,6 +168,8 @@ export default function PatientProfile() {
   const [noteDateRange, setNoteDateRange] = useState(false)
   const [deletedNotes, setDeletedNotes] = useState([])
   const [showDeletedNotes, setShowDeletedNotes] = useState(false)
+  const [showNoteFilters, setShowNoteFilters] = useState(false)
+  const noteFiltersRef = useRef(null)
 
   // Three-dot actions menu
   const [showActionsMenu, setShowActionsMenu] = useState(false)
@@ -122,13 +190,17 @@ export default function PatientProfile() {
   const [panelHospEditing, setPanelHospEditing] = useState(null)
 
   // Appointments
-  const [showApptForm, setShowApptForm] = useState(false)
   const [showPastAppts, setShowPastAppts] = useState(false)
-  const [newAppt, setNewAppt] = useState({ title: '', provider: '', location: '', appointment_date: '', notes: '' })
-  const [apptModal, setApptModal] = useState(null) // editing draft: { id, title, provider, location, appointment_date, notes }
+  const [pastApptSearch, setPastApptSearch] = useState('')
+  const [upcomingApptSearch, setUpcomingApptSearch] = useState('')
+  const [apptModal, setApptModal] = useState(null) // null | { mode:'new'|'edit', draft:{} } | { mode:'view', appt:{} }
+  const [savingAppt, setSavingAppt] = useState(false)
+  const [calViewDate, setCalViewDate] = useState(new Date())
+  const [calSelectedDate, setCalSelectedDate] = useState(null) // 'yyyy-MM-dd' | null
 
   // Documents
   const [uploadingDoc, setUploadingDoc] = useState(false)
+  const [docPreview, setDocPreview] = useState(null) // null | { doc, url }
   const fileInputRef = useRef(null)
 
   useEffect(() => { loadPatient() }, [id])
@@ -144,9 +216,20 @@ export default function PatientProfile() {
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [showActionsMenu])
 
+  useEffect(() => {
+    if (!showNoteFilters) return
+    function handleClickOutside(e) {
+      if (noteFiltersRef.current && !noteFiltersRef.current.contains(e.target)) {
+        setShowNoteFilters(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [showNoteFilters])
+
   async function loadPatient() {
     setLoading(true)
-    const [p, c, m, pr, ct, ec, gl, ap, hosp, n, nd, docs] = await Promise.all([
+    const [p, c, m, pr, ct, ec, gl, ap, hosp, n, nd, docs, ins] = await Promise.all([
       supabase.from('patients').select('*').eq('id', id).single(),
       supabase.from('conditions').select('*').eq('patient_id', id).order('created_at'),
       supabase.from('medications').select('*').eq('patient_id', id).order('created_at'),
@@ -159,12 +242,40 @@ export default function PatientProfile() {
       supabase.from('notes').select('*').eq('patient_id', id).is('deleted_at', null).order('note_date', { ascending: false }),
       supabase.from('notes').select('*').eq('patient_id', id).not('deleted_at', 'is', null).order('deleted_at', { ascending: false }),
       supabase.from('documents').select('*').eq('patient_id', id).order('created_at', { ascending: false }),
+      supabase.from('insurances').select('*').eq('patient_id', id).order('created_at'),
     ])
     setPatient(p.data)
     setConditions(c.data || [])
     setMedications(m.data || [])
     setProviders(pr.data || [])
-    setCaretakers(ct.data || [])
+    const ctData = ct.data || []
+    setCaretakers(ctData)
+    // Load + migrate caretaker schedules
+    if (ctData.length > 0) {
+      const ctIds = ctData.map(x => x.id)
+      const { data: schedData } = await supabase.from('caretaker_schedules').select('*').in('caretaker_id', ctIds)
+      const grouped = {}
+      for (const s of schedData || []) {
+        if (!grouped[s.caretaker_id]) grouped[s.caretaker_id] = []
+        grouped[s.caretaker_id].push(s)
+      }
+      // Migrate legacy schedule_days / schedule_time for caretakers with no schedule rows yet
+      const toMigrate = ctData.filter(c => (c.schedule_days || []).length > 0 && !grouped[c.id])
+      if (toMigrate.length > 0) {
+        const migrateRows = toMigrate.flatMap(c => {
+          const parts = (c.schedule_time || '').split(/\s*[–—\-]\s*/)
+          const start_time = parts[0]?.trim() || null
+          const end_time = parts[1]?.trim() || null
+          return c.schedule_days.map(day => ({ caretaker_id: c.id, day, start_time, end_time }))
+        })
+        const { data: migrated } = await supabase.from('caretaker_schedules').insert(migrateRows).select()
+        for (const s of migrated || []) {
+          if (!grouped[s.caretaker_id]) grouped[s.caretaker_id] = []
+          grouped[s.caretaker_id].push(s)
+        }
+      }
+      setCaretakerSchedules(grouped)
+    }
     setEmergencyContacts(ec.data || [])
     setGoals(gl.data || [])
     setAppointments(ap.data || [])
@@ -172,19 +283,27 @@ export default function PatientProfile() {
     setNotes(n.data || [])
     setDeletedNotes(nd.data || [])
     setDocuments(docs.data || [])
+
+    // Auto-migrate legacy insurance fields from patients table
+    let insData = ins.data || []
+    if (insData.length === 0 && p.data?.insurance_type) {
+      const { data: migrated } = await supabase.from('insurances').insert({
+        patient_id: id,
+        insurance_type: p.data.insurance_type,
+        insurance_provider: p.data.insurance_provider || null,
+        billing_concerns: p.data.billing_concerns || null,
+        is_primary: true,
+      }).select()
+      insData = migrated || []
+    }
+    setInsurances(insData)
     setLoading(false)
   }
 
   // ── Patient section edit ──────────────────────────────────────
-  const INSURANCE_TYPES = ['Medicare', 'Medicaid', 'Medicare + Medicaid', 'Private Insurance', 'Uninsured']
-
   function startEditSection(section) {
     setEditingSection(section)
     setDraftPatient({ ...patient })
-    if (section === 'insurance') {
-      const val = patient?.insurance_type || ''
-      setInsuranceOtherMode(!!val && !INSURANCE_TYPES.includes(val))
-    }
   }
 
   async function saveSection() {
@@ -193,6 +312,37 @@ export default function PatientProfile() {
     if (data) setPatient(data)
     setEditingSection(null)
     setSaving(false)
+  }
+
+  // ── Insurance ─────────────────────────────────────────────────
+  async function saveInsurance(resolvedDraft) {
+    setSavingInsurance(true)
+    const mode = insuranceModal.mode
+    const insId = insuranceModal.id
+    if (resolvedDraft.is_primary) {
+      await supabase.from('insurances').update({ is_primary: false }).eq('patient_id', id)
+    }
+    const payload = {
+      patient_id: id,
+      insurance_type: resolvedDraft.insurance_type || null,
+      insurance_provider: resolvedDraft.insurance_provider || null,
+      billing_concerns: resolvedDraft.billing_concerns || null,
+      is_primary: resolvedDraft.is_primary || false,
+    }
+    if (mode === 'new') {
+      await supabase.from('insurances').insert(payload)
+    } else {
+      await supabase.from('insurances').update(payload).eq('id', insId)
+    }
+    const { data } = await supabase.from('insurances').select('*').eq('patient_id', id).order('created_at')
+    setInsurances(data || [])
+    setInsuranceModal(null)
+    setSavingInsurance(false)
+  }
+
+  async function deleteInsurance(insId) {
+    await supabase.from('insurances').delete().eq('id', insId)
+    setInsurances(prev => prev.filter(i => i.id !== insId))
   }
 
   function openIntakePanel() {
@@ -294,11 +444,35 @@ export default function PatientProfile() {
   const TABLE = { conditions: 'conditions', medications: 'medications', providers: 'providers', caretakers: 'caretakers', emergency_contacts: 'emergency_contacts', goals: 'goals', hospitalizations: 'hospitalizations' }
   const SETTER = { conditions: setConditions, medications: setMedications, providers: setProviders, caretakers: setCaretakers, emergency_contacts: setEmergencyContacts, goals: setGoals, hospitalizations: setHospitalizations }
 
-  function startEditItem(type, item) { setEditingItem({ type, id: item.id, draft: { ...item } }) }
+  function startEditItem(type, item) {
+    if (type === 'caretakers') {
+      setEditingItem({ type, id: item.id, draft: { ...item, scheduleBlocks: scheduleRowsToBlocks(caretakerSchedules[item.id] || []) } })
+      return
+    }
+    setEditingItem({ type, id: item.id, draft: { ...item } })
+  }
+
+  async function saveCaretakerSchedules(ctId, blocks) {
+    await supabase.from('caretaker_schedules').delete().eq('caretaker_id', ctId)
+    const rows = (blocks || []).flatMap(b =>
+      (b.days || []).map(day => ({ caretaker_id: ctId, day, start_time: b.start_time || null, end_time: b.end_time || null }))
+    )
+    if (rows.length === 0) { setCaretakerSchedules(prev => ({ ...prev, [ctId]: [] })); return }
+    const { data } = await supabase.from('caretaker_schedules').insert(rows).select()
+    setCaretakerSchedules(prev => ({ ...prev, [ctId]: data || [] }))
+  }
 
   async function saveItem() {
     if (!editingItem) return
     const { type, id: itemId, draft } = editingItem
+    if (type === 'caretakers') {
+      const { scheduleBlocks, schedule_days: _sd, schedule_time: _st, ...fields } = draft
+      const { data } = await supabase.from('caretakers').update(fields).eq('id', itemId).select().single()
+      if (data) setCaretakers(prev => prev.map(x => x.id === itemId ? data : x))
+      await saveCaretakerSchedules(itemId, scheduleBlocks)
+      setEditingItem(null)
+      return
+    }
     const { data } = await supabase.from(TABLE[type]).update(draft).eq('id', itemId).select().single()
     if (data) SETTER[type](prev => prev.map(x => x.id === itemId ? data : x))
     setEditingItem(null)
@@ -307,11 +481,22 @@ export default function PatientProfile() {
   async function deleteItem(type, itemId) {
     await supabase.from(TABLE[type]).delete().eq('id', itemId)
     SETTER[type](prev => prev.filter(x => x.id !== itemId))
+    if (type === 'caretakers') setCaretakerSchedules(prev => { const n = { ...prev }; delete n[itemId]; return n })
   }
 
   async function saveNewItem() {
     if (!addingItem) return
     const { type, draft } = addingItem
+    if (type === 'caretakers') {
+      const { scheduleBlocks, schedule_days: _sd, schedule_time: _st, ...fields } = draft
+      const { data } = await supabase.from('caretakers').insert({ patient_id: id, ...fields }).select().single()
+      if (data) {
+        setCaretakers(prev => [...prev, data])
+        await saveCaretakerSchedules(data.id, scheduleBlocks)
+      }
+      setAddingItem(null)
+      return
+    }
     const { data } = await supabase.from(TABLE[type]).insert({ patient_id: id, ...draft }).select().single()
     if (data) SETTER[type](prev => [...prev, data])
     setAddingItem(null)
@@ -382,19 +567,28 @@ export default function PatientProfile() {
   }
 
   // ── Appointments ──────────────────────────────────────────────
-  async function addAppointment() {
-    if (!newAppt.title || !newAppt.appointment_date) return
-    const { data } = await supabase.from('appointments').insert({ patient_id: id, ...newAppt }).select().single()
-    if (data) setAppointments(prev => [...prev, data].sort((a, b) => new Date(a.appointment_date) - new Date(b.appointment_date)))
-    setNewAppt({ title: '', provider: '', location: '', appointment_date: '', notes: '' })
-    setShowApptForm(false)
-  }
-
-  async function updateAppointment() {
-    if (!apptModal?.title || !apptModal?.appointment_date) return
-    const { id: apptId, ...fields } = apptModal
-    const { data } = await supabase.from('appointments').update(fields).eq('id', apptId).select().single()
-    if (data) setAppointments(prev => prev.map(a => a.id === apptId ? data : a).sort((a, b) => new Date(a.appointment_date) - new Date(b.appointment_date)))
+  // resolvedDraft comes from AppointmentModal's local state (not apptModal.draft, which is the initial snapshot)
+  async function saveApptModal(resolvedDraft) {
+    if (!resolvedDraft?.title?.trim() || !resolvedDraft?.appointment_date) {
+      console.warn('[saveApptModal] Validation failed — title or appointment_date missing', resolvedDraft)
+      return
+    }
+    setSavingAppt(true)
+    // Use presence of id to distinguish insert vs update (supports edit-from-view-mode)
+    if (!resolvedDraft.id) {
+      const payload = { patient_id: id, ...resolvedDraft }
+      console.log('[saveApptModal] Inserting:', payload)
+      const { data, error } = await supabase.from('appointments').insert(payload).select().single()
+      console.log('[saveApptModal] Insert result:', data, 'Error:', error)
+      if (data) setAppointments(prev => [...prev, data].sort((a, b) => new Date(a.appointment_date) - new Date(b.appointment_date)))
+    } else {
+      const { id: apptId, patient_id: _pid, created_at: _ca, ...fields } = resolvedDraft
+      console.log('[saveApptModal] Updating id:', apptId, 'Fields:', fields)
+      const { data, error } = await supabase.from('appointments').update(fields).eq('id', apptId).select().single()
+      console.log('[saveApptModal] Update result:', data, 'Error:', error)
+      if (data) setAppointments(prev => prev.map(a => a.id === apptId ? data : a).sort((a, b) => new Date(a.appointment_date) - new Date(b.appointment_date)))
+    }
+    setSavingAppt(false)
     setApptModal(null)
   }
 
@@ -427,13 +621,216 @@ export default function PatientProfile() {
 
   async function downloadDocument(doc) {
     const { data } = await supabase.storage.from('documents').createSignedUrl(doc.file_url, 60)
-    if (data?.signedUrl) window.open(data.signedUrl, '_blank')
+    if (!data?.signedUrl) return
+    const a = document.createElement('a')
+    a.href = data.signedUrl
+    a.download = doc.name
+    a.click()
+  }
+
+  async function openDocPreview(doc) {
+    const category = getDocFileCategory(doc)
+    const { data } = await supabase.storage.from('documents').createSignedUrl(doc.file_url, 300)
+    if (!data?.signedUrl) return
+    if (category === 'other') {
+      const a = document.createElement('a')
+      a.href = data.signedUrl
+      a.download = doc.name
+      a.click()
+      return
+    }
+    setDocPreview({ doc, url: data.signedUrl })
   }
 
   async function deleteDocument(doc) {
     await supabase.storage.from('documents').remove([doc.file_url])
     await supabase.from('documents').delete().eq('id', doc.id)
     setDocuments(prev => prev.filter(d => d.id !== doc.id))
+  }
+
+  function exportProfilePDF() {
+    const age = patient?.dob ? differenceInYears(new Date(), parseISO(patient.dob)) : null
+    const upcoming = appointments
+      .filter(a => !a.completed && isAfter(parseISO(a.appointment_date), startOfDay(new Date())))
+      .sort((a, b) => new Date(a.appointment_date) - new Date(b.appointment_date))
+
+    function field(label, value) {
+      if (!value) return ''
+      return `<div class="field"><div class="label">${label}</div><div class="value">${value}</div></div>`
+    }
+
+    const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>${patient.first_name} ${patient.last_name} — Patient Profile</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600&family=Montserrat:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Montserrat', Arial, sans-serif; color: #1f2937; padding: 40px; font-size: 12px; line-height: 1.6; }
+    .patient-name { font-family: 'Cormorant Garamond', Georgia, serif; font-size: 34px; font-weight: 600; color: #111827; margin-bottom: 6px; }
+    .meta-row { display: flex; gap: 16px; align-items: center; margin-bottom: 28px; flex-wrap: wrap; }
+    .badge { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; }
+    .badge-active { background: #d1fae5; color: #065f46; }
+    .badge-inactive { background: #f3f4f6; color: #6b7280; }
+    .meta-item { font-size: 11px; color: #6b7280; }
+    .meta-item strong { color: #374151; }
+    .section { margin-bottom: 22px; }
+    .section-title { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: #9ca3af; margin-bottom: 10px; padding-bottom: 5px; border-bottom: 1px solid #f3f4f6; }
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 0 28px; }
+    .three-col { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0 20px; }
+    .field { margin-bottom: 12px; }
+    .label { font-size: 10px; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 2px; }
+    .value { font-size: 12px; color: #374151; }
+    .card { border: 1px solid #f3f4f6; border-radius: 8px; padding: 9px 12px; margin-bottom: 7px; background: #fafafa; }
+    .card-title { font-size: 12px; font-weight: 600; color: #1f2937; margin-bottom: 3px; }
+    .card-detail { font-size: 11px; color: #6b7280; margin-top: 2px; }
+    .tag { display: inline-block; background: #eff6ff; color: #3b82f6; border: 1px solid #bfdbfe; border-radius: 999px; padding: 2px 9px; font-size: 11px; font-weight: 500; margin: 2px 3px 2px 0; }
+    .appt-row { display: flex; gap: 16px; align-items: flex-start; }
+    .appt-date { font-size: 11px; color: #374151; font-weight: 600; min-width: 90px; }
+    .appt-time { font-size: 10px; color: #9ca3af; margin-top: 1px; }
+    .footer { margin-top: 32px; padding-top: 12px; border-top: 1px solid #e5e7eb; font-size: 10px; color: #9ca3af; }
+    @page { margin: 1.5cm; }
+    @media print {
+      body { padding: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    }
+  </style>
+</head>
+<body>
+  <div class="patient-name">${patient.first_name} ${patient.last_name}</div>
+  <div class="meta-row">
+    <span class="badge ${patient.status === 'active' ? 'badge-active' : 'badge-inactive'}">${patient.status || 'active'}</span>
+    ${age !== null ? `<span class="meta-item"><strong>${age} yrs</strong></span>` : ''}
+    ${patient.dob ? `<span class="meta-item">DOB: <strong>${format(parseISO(patient.dob), 'MMMM d, yyyy')}</strong></span>` : ''}
+    ${patient.client_since ? `<span class="meta-item">Client since <strong>${format(parseISO(patient.client_since), 'MMMM yyyy')}</strong></span>` : ''}
+  </div>
+
+  <div class="section">
+    <div class="section-title">Demographics</div>
+    <div class="three-col">
+      ${field('Phone', patient.phone)}
+      ${field('Email', patient.email)}
+      ${field('Address', patient.address)}
+    </div>
+  </div>
+
+  ${emergencyContacts.length > 0 ? `
+  <div class="section">
+    <div class="section-title">Emergency Contacts</div>
+    ${emergencyContacts.map(ec => `
+      <div class="card">
+        <div class="card-title">${ec.name}${ec.relationship ? ` &nbsp;·&nbsp; <span style="font-weight:400;color:#6b7280;">${ec.relationship}</span>` : ''}</div>
+        ${ec.phone ? `<div class="card-detail">📞 ${ec.phone}</div>` : ''}
+        ${ec.email ? `<div class="card-detail">✉ ${ec.email}</div>` : ''}
+        ${ec.notes ? `<div class="card-detail" style="color:#9ca3af;">${ec.notes}</div>` : ''}
+      </div>
+    `).join('')}
+  </div>` : ''}
+
+  ${insurances.length > 0 ? `
+  <div class="section">
+    <div class="section-title">Insurance</div>
+    ${insurances.map(ins => `
+      <div class="card">
+        <div class="card-title">
+          ${ins.insurance_provider || 'Unknown Provider'}
+          ${ins.is_primary ? ` &nbsp;<span style="background:#eff6ff;color:#3b82f6;border:1px solid #bfdbfe;border-radius:999px;padding:1px 7px;font-size:10px;font-weight:600;">Primary</span>` : ''}
+        </div>
+        ${ins.insurance_type ? `<div class="card-detail">Type: ${ins.insurance_type}</div>` : ''}
+        ${ins.billing_concerns ? `<div class="card-detail">Billing notes: ${ins.billing_concerns}</div>` : ''}
+      </div>
+    `).join('')}
+  </div>` : ''}
+
+  ${conditions.length > 0 ? `
+  <div class="section">
+    <div class="section-title">Conditions</div>
+    <div>${conditions.map(c => `<span class="tag">${c.name}</span>`).join('')}</div>
+  </div>` : ''}
+
+  ${medications.length > 0 ? `
+  <div class="section">
+    <div class="section-title">Medications</div>
+    <div class="two-col">
+      ${medications.map(m => `
+        <div class="card">
+          <div class="card-title">${m.name}</div>
+          ${(m.dose || m.frequency) ? `<div class="card-detail">${[m.dose, m.frequency].filter(Boolean).join(' · ')}</div>` : ''}
+          ${m.concerns ? `<div class="card-detail" style="color:#dc2626;">⚠ ${m.concerns}</div>` : ''}
+        </div>
+      `).join('')}
+    </div>
+  </div>` : ''}
+
+  ${providers.length > 0 ? `
+  <div class="section">
+    <div class="section-title">Care Team</div>
+    <div class="two-col">
+      ${providers.map(p => `
+        <div class="card">
+          <div class="card-title">${p.name}${p.role ? ` &nbsp;·&nbsp; <span style="font-weight:400;color:#6b7280;">${p.role}</span>` : ''}</div>
+          ${p.practice ? `<div class="card-detail">${p.practice}</div>` : ''}
+          ${p.phone ? `<div class="card-detail">📞 ${p.phone}</div>` : ''}
+          ${p.fax ? `<div class="card-detail">Fax: ${p.fax}</div>` : ''}
+          ${p.email ? `<div class="card-detail">✉ ${p.email}</div>` : ''}
+        </div>
+      `).join('')}
+    </div>
+  </div>` : ''}
+
+  ${caretakers.length > 0 ? `
+  <div class="section">
+    <div class="section-title">Caretakers</div>
+    <div class="two-col">
+      ${caretakers.map(ct => {
+        const blocks = groupScheduleRows(caretakerSchedules[ct.id] || [])
+        const schedLines = blocks
+          .filter(b => b.days.length > 0)
+          .map(b => `${b.days.join(', ')}${(b.start_time || b.end_time) ? ` · ${formatTime(b.start_time)}${b.end_time ? ` – ${formatTime(b.end_time)}` : ''}` : ''}`)
+        return `
+          <div class="card">
+            <div class="card-title">${ct.name}${ct.role ? ` &nbsp;·&nbsp; <span style="font-weight:400;color:#6b7280;">${ct.role}</span>` : ''}</div>
+            ${ct.phone ? `<div class="card-detail">📞 ${ct.phone}</div>` : ''}
+            ${ct.email ? `<div class="card-detail">✉ ${ct.email}</div>` : ''}
+            ${schedLines.length > 0 ? `<div class="card-detail" style="margin-top:5px;"><span style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:#9ca3af;">Schedule</span><br>${schedLines.join('<br>')}</div>` : ''}
+          </div>
+        `
+      }).join('')}
+    </div>
+  </div>` : ''}
+
+  ${upcoming.length > 0 ? `
+  <div class="section">
+    <div class="section-title">Upcoming Appointments</div>
+    ${upcoming.map(a => `
+      <div class="card">
+        <div class="appt-row">
+          <div>
+            <div class="appt-date">${format(parseISO(a.appointment_date), 'MMM d, yyyy')}</div>
+            <div class="appt-time">${format(parseISO(a.appointment_date), 'h:mm a')}</div>
+          </div>
+          <div style="flex:1;">
+            <div class="card-title">${a.title}</div>
+            ${a.appointment_type ? `<div class="card-detail">${a.appointment_type}</div>` : ''}
+            ${a.provider ? `<div class="card-detail">Provider: ${a.provider}</div>` : ''}
+            ${a.location ? `<div class="card-detail">📍 ${a.location}</div>` : ''}
+          </div>
+        </div>
+      </div>
+    `).join('')}
+  </div>` : ''}
+
+  <div class="footer">Exported from SBHA Care Manager · ${format(new Date(), 'MMMM d, yyyy')}</div>
+</body>
+</html>`
+
+    const printWindow = window.open('', '_blank')
+    if (!printWindow) return
+    printWindow.document.write(html)
+    printWindow.document.close()
+    printWindow.focus()
+    setTimeout(() => { printWindow.print() }, 600)
   }
 
   // ── AI Briefing ───────────────────────────────────────────────
@@ -470,6 +867,7 @@ export default function PatientProfile() {
   const pastAppts = [...appointments.filter(a => a.completed || !isAfter(new Date(a.appointment_date), now))]
     .sort((a, b) => new Date(b.appointment_date) - new Date(a.appointment_date))
   // ── Notes filtering (client-side) ─────────────────────────────
+  const filtersActive = noteTypeFilter !== 'All' || !!noteDateFrom
   const filteredNotes = notes.filter(note => {
     if (noteSearch.trim()) {
       const q = noteSearch.toLowerCase()
@@ -508,18 +906,16 @@ export default function PatientProfile() {
               {patient.first_name} {patient.last_name}
             </h1>
             <div className="flex items-center gap-3 mt-2 flex-wrap">
-              {age && <span className="font-body text-sm text-gray-500">Age {age}</span>}
-              {patient.dob && (
-                <span className="font-body text-sm text-gray-400">
-                  DOB {format(parseISO(patient.dob), 'MMMM d, yyyy')}
-                </span>
-              )}
-              {patient.client_since && (
-                <span className="font-body text-sm text-gray-400">
-                  Client since {format(parseISO(patient.client_since), 'MMMM yyyy')}
-                </span>
-              )}
-              <span className={`tag ${patient.status === 'active' ? 'bg-green-50 text-green-600' : 'bg-gray-100 text-gray-500'}`}>
+              <div className="flex items-center gap-0 font-body text-sm text-gray-500">
+                {age && <span>Age {age}</span>}
+                {patient.dob && (
+                  <><span className="mx-2">|</span><span>DOB {format(parseISO(patient.dob), 'MMMM d, yyyy')}</span></>
+                )}
+                {patient.client_since && (
+                  <><span className="mx-2">|</span><span>Client since {format(parseISO(patient.client_since), 'MMMM yyyy')}</span></>
+                )}
+              </div>
+              <span className={`tag ml-1 ${patient.status === 'active' ? 'bg-green-50 text-green-600' : 'bg-gray-100 text-gray-500'}`}>
                 {patient.status}
               </span>
             </div>
@@ -528,15 +924,15 @@ export default function PatientProfile() {
           <div className="flex items-center gap-3 flex-wrap">
             <button
               onClick={openIntakePanel}
-              className="flex items-center gap-2 bg-mauve text-white px-5 py-2.5 rounded-xl font-body text-sm font-semibold shadow-sm hover:bg-mauve/90 transition-all"
+              className="flex items-center gap-2 px-3 py-1.5 rounded-xl font-body text-sm font-semibold shadow-sm transition-all bg-primary text-white hover:bg-primary/90"
             >
-              <FileText size={15} />
+              <ClipboardList size={15} />
               Intake &amp; Background
             </button>
             <button
               onClick={generateAISummary}
               disabled={aiLoading}
-              className="flex items-center gap-2 bg-primary text-white px-5 py-2.5 rounded-xl font-body text-sm font-semibold shadow-sm hover:bg-primary/90 transition-all disabled:opacity-60"
+              className="flex items-center gap-2 px-3 py-1.5 rounded-xl font-body text-sm font-semibold shadow-sm transition-all bg-primary text-white hover:bg-primary/90 disabled:opacity-60"
             >
               <Sparkles size={15} />
               {aiLoading ? 'Generating…' : 'AI Briefing'}
@@ -552,6 +948,14 @@ export default function PatientProfile() {
               </button>
               {showActionsMenu && (
                 <div className="absolute right-0 top-full mt-1.5 w-52 bg-white rounded-xl shadow-lg border border-gray-100 py-1.5 z-20">
+                  <button
+                    onClick={() => { exportProfilePDF(); setShowActionsMenu(false) }}
+                    className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm font-body text-left text-gray-600 hover:bg-primary-light hover:text-primary transition-colors"
+                  >
+                    <Printer size={15} />
+                    Export Profile as PDF
+                  </button>
+                  <div className="my-1 border-t border-gray-100" />
                   <button
                     onClick={() => { toggleStatus(); setShowActionsMenu(false) }}
                     className={`w-full flex items-center gap-2.5 px-4 py-2.5 text-sm font-body text-left transition-colors ${
@@ -580,10 +984,27 @@ export default function PatientProfile() {
         )}
       </div>
 
+      {/* ── COLLAPSE / EXPAND ALL ── */}
+      <div className="flex items-center gap-3 mb-2">
+        <button
+          onClick={() => setCollapsedCards(Object.fromEntries(['demographics','emergency_contacts','insurance','documents','conditions','medications','care_team','caretakers','appointments','notes'].map(k => [k, true])))}
+          className="font-body text-xs text-gray-400 hover:text-gray-600 transition-colors"
+        >
+          Collapse all
+        </button>
+        <span className="text-gray-300 text-xs">·</span>
+        <button
+          onClick={() => setCollapsedCards({})}
+          className="font-body text-xs text-gray-400 hover:text-gray-600 transition-colors"
+        >
+          Expand all
+        </button>
+      </div>
+
       {/* ── THREE-COLUMN GRID ── */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-7">
 
-        {/* ── LEFT: Demographics / Emergency / Insurance ── */}
+        {/* ── LEFT: Demographics / Emergency / Insurance / Documents ── */}
         <div className="space-y-6">
 
           {/* Demographics */}
@@ -592,6 +1013,7 @@ export default function PatientProfile() {
             onEdit={() => startEditSection('demographics')}
             editing={editingSection === 'demographics'}
             onSave={saveSection} onCancel={() => setEditingSection(null)} saving={saving}
+            collapsed={!!collapsedCards.demographics} onToggle={() => toggleCard('demographics')}
           >
             {editingSection === 'demographics' ? (
               <div className="space-y-3">
@@ -629,19 +1051,32 @@ export default function PatientProfile() {
           </SectionCard>
 
           {/* Emergency Contacts */}
-          <div className="card p-6">
-            <div className="flex items-center justify-between mb-4">
+          <div className="card p-0">
+            <div
+              className="flex items-center justify-between px-6 pt-5 pb-4 cursor-pointer select-none"
+              onClick={() => toggleCard('emergency_contacts')}
+            >
               <div className="flex items-center gap-2">
-                <span className="text-primary"><Shield size={15} /></span>
+                <span className="text-gray-300 flex-shrink-0">
+                  {collapsedCards.emergency_contacts ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
+                </span>
+                <span className="text-primary"><Phone size={15} /></span>
                 <h3 className="font-body text-xs font-semibold text-gray-500 uppercase tracking-wider">Emergency Contacts</h3>
               </div>
-              <button
-                onClick={() => setAddingItem({ type: 'emergency_contacts', draft: { name: '', relationship: '', phone: '', email: '' } })}
-                className="p-1.5 text-gray-300 hover:text-primary transition-colors"
-              >
-                <Plus size={14} />
-              </button>
+              <div onClick={e => e.stopPropagation()}>
+                <button
+                  onClick={() => setAddingItem({ type: 'emergency_contacts', draft: { name: '', relationship: '', phone: '', email: '' } })}
+                  className="p-1.5 text-gray-300 hover:text-gray-500 transition-colors"
+                >
+                  <Plus size={14} />
+                </button>
+              </div>
             </div>
+            <div
+              className={`grid ${collapsedCards.emergency_contacts ? 'grid-rows-[0fr]' : 'grid-rows-[1fr]'}`}
+              style={{ transition: 'grid-template-rows 200ms ease' }}
+            >
+            <div className="overflow-hidden min-h-0"><div className="px-6 pb-6">
 
             {addingItem?.type === 'emergency_contacts' && (
               <ItemForm
@@ -686,7 +1121,7 @@ export default function PatientProfile() {
                           {ec.email && <InfoRow icon={<Mail size={11} />} value={ec.email} small />}
                         </div>
                         <div className="flex items-center gap-0.5 flex-shrink-0">
-                          <button onClick={() => startEditItem('emergency_contacts', ec)} className="p-1 text-gray-300 hover:text-primary transition-colors"><Edit3 size={12} /></button>
+                          <button onClick={() => startEditItem('emergency_contacts', ec)} className="p-1 text-gray-300 hover:text-gray-500 transition-colors"><Edit3 size={12} /></button>
                           <button onClick={() => deleteItem('emergency_contacts', ec.id)} className="p-1 text-gray-300 hover:text-red-400 transition-colors"><Trash2 size={12} /></button>
                         </div>
                       </div>
@@ -695,65 +1130,121 @@ export default function PatientProfile() {
                 ))}
               </div>
             )}
-          </div>
+          </div></div></div></div>
 
           {/* Insurance */}
-          <SectionCard
-            title="Insurance" icon={<Shield size={15} />}
-            onEdit={() => startEditSection('insurance')}
-            editing={editingSection === 'insurance'}
-            onSave={saveSection} onCancel={() => setEditingSection(null)} saving={saving}
-          >
-            {editingSection === 'insurance' ? (
-              <div className="space-y-3">
-                <Field label="Insurance Type">
-                  <select
-                    className="input"
-                    value={insuranceOtherMode ? '__other__' : (draftPatient.insurance_type || '')}
-                    onChange={e => {
-                      if (e.target.value === '__other__') {
-                        setInsuranceOtherMode(true)
-                        setDraftPatient(p => ({ ...p, insurance_type: '' }))
-                      } else {
-                        setInsuranceOtherMode(false)
-                        setDraftPatient(p => ({ ...p, insurance_type: e.target.value }))
-                      }
-                    }}
-                  >
-                    <option value="">Select type…</option>
-                    {INSURANCE_TYPES.map(opt => <option key={opt} value={opt}>{opt}</option>)}
-                    <option value="__other__">Other</option>
-                  </select>
-                  {insuranceOtherMode && (
-                    <input
-                      className="input mt-2"
-                      placeholder="Specify insurance type…"
-                      value={draftPatient.insurance_type || ''}
-                      onChange={e => setDraftPatient(p => ({ ...p, insurance_type: e.target.value }))}
-                    />
-                  )}
-                </Field>
-                <Field label="Insurance Provider">
-                  <input className="input" value={draftPatient.insurance_provider || ''} onChange={e => setDraftPatient(p => ({ ...p, insurance_provider: e.target.value }))} />
-                </Field>
-                <Field label="Billing Concerns">
-                  <textarea className="input resize-none" rows={3} value={draftPatient.billing_concerns || ''} onChange={e => setDraftPatient(p => ({ ...p, billing_concerns: e.target.value }))} />
-                </Field>
+          <div className="card p-0">
+            <div
+              className="flex items-center justify-between px-6 pt-5 pb-4 cursor-pointer select-none"
+              onClick={() => toggleCard('insurance')}
+            >
+              <div className="flex items-center gap-2">
+                <span className="text-gray-300 flex-shrink-0">
+                  {collapsedCards.insurance ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
+                </span>
+                <Shield size={15} className="text-primary" />
+                <h3 className="font-body text-xs font-semibold text-gray-500 uppercase tracking-wider">Insurance</h3>
               </div>
+              <div onClick={e => e.stopPropagation()}>
+                <button
+                  onClick={() => setInsuranceModal({ mode: 'new', draft: { insurance_type: '', insurance_provider: '', billing_concerns: '', is_primary: insurances.length === 0 } })}
+                  className="p-1.5 text-gray-300 hover:text-gray-500 transition-colors"
+                >
+                  <Plus size={14} />
+                </button>
+              </div>
+            </div>
+            <div
+              className={`grid ${collapsedCards.insurance ? 'grid-rows-[0fr]' : 'grid-rows-[1fr]'}`}
+              style={{ transition: 'grid-template-rows 200ms ease' }}
+            >
+            <div className="overflow-hidden min-h-0"><div className="px-6 pb-6">
+            {insurances.length === 0 ? (
+              <p className="font-body text-xs text-gray-400">No insurance info on file</p>
             ) : (
-              <div>
-                {patient.insurance_type && (
-                  <div className="mb-2"><span className="tag bg-primary text-white">{patient.insurance_type}</span></div>
-                )}
-                {patient.insurance_provider && (
-                  <p className="font-body text-sm text-gray-600">{patient.insurance_provider}</p>
-                )}
-                {patient.billing_concerns && (
-                  <p className="font-body text-xs text-gray-500 mt-2 leading-relaxed">{patient.billing_concerns}</p>
-                )}
-                {!patient.insurance_type && !patient.insurance_provider && (
-                  <p className="font-body text-xs text-gray-400">No insurance info on file</p>
-                )}
+              <div className="space-y-4">
+                {insurances.map(ins => (
+                  <div key={ins.id} className="border-b border-gray-50 pb-4 last:border-0 last:pb-0">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5 flex-wrap mb-1.5">
+                          {ins.insurance_type && (
+                            <span className="tag bg-primary text-white text-[10px]">{ins.insurance_type}</span>
+                          )}
+                          {ins.is_primary && (
+                            <span className="tag bg-green-50 text-green-600 border border-green-100 text-[10px]">Primary</span>
+                          )}
+                        </div>
+                        {ins.insurance_provider && (
+                          <p className="font-body text-sm text-gray-700">{ins.insurance_provider}</p>
+                        )}
+                        {ins.billing_concerns && (
+                          <p className="font-body text-xs text-gray-500 mt-1 leading-relaxed">{ins.billing_concerns}</p>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-0.5 flex-shrink-0">
+                        <button
+                          onClick={() => setInsuranceModal({ mode: 'edit', id: ins.id, draft: { insurance_type: ins.insurance_type || '', insurance_provider: ins.insurance_provider || '', billing_concerns: ins.billing_concerns || '', is_primary: ins.is_primary || false } })}
+                          className="p-1 text-gray-300 hover:text-gray-500 transition-colors"
+                        ><Edit3 size={12} /></button>
+                        <button onClick={() => deleteInsurance(ins.id)} className="p-1 text-gray-300 hover:text-red-400 transition-colors"><Trash2 size={12} /></button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {insuranceModal && (
+              <InsuranceModal
+                modal={insuranceModal}
+                saving={savingInsurance}
+                onClose={() => setInsuranceModal(null)}
+                onSave={saveInsurance}
+              />
+            )}
+            </div></div></div>
+          </div>
+
+          {/* Documents */}
+          <SectionCard title="Documents" icon={<Paperclip size={15} />}
+            collapsed={!!collapsedCards.documents} onToggle={() => toggleCard('documents')}
+          >
+            <div className="mb-3">
+              <input ref={fileInputRef} type="file" className="hidden" onChange={uploadDocument} />
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploadingDoc}
+                className="flex items-center gap-1.5 text-xs font-body text-primary hover:underline disabled:opacity-50"
+              >
+                <Plus size={12} />
+                {uploadingDoc ? 'Uploading…' : 'Upload document'}
+              </button>
+            </div>
+            {documents.length === 0 ? (
+              <p className="font-body text-xs text-gray-400">No documents uploaded</p>
+            ) : (
+              <div className="space-y-2">
+                {documents.map(doc => (
+                  <div key={doc.id} className="flex items-center justify-between gap-2 bg-gray-50 rounded-xl px-3 py-2.5">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <FileText size={13} className="text-primary flex-shrink-0" />
+                      <div className="min-w-0">
+                        <button
+                          onClick={() => openDocPreview(doc)}
+                          className="font-body text-xs font-medium text-gray-700 hover:text-primary truncate text-left transition-colors block max-w-full"
+                        >
+                          {doc.name}
+                        </button>
+                        <p className="font-body text-[10px] text-gray-400">{format(parseISO(doc.created_at), 'MMM d, yyyy')}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1 flex-shrink-0">
+                      <button onClick={() => downloadDocument(doc)} className="p-1 text-gray-300 hover:text-primary transition-colors"><Download size={13} /></button>
+                      <button onClick={() => deleteDocument(doc)} className="p-1 text-gray-300 hover:text-red-400 transition-colors"><Trash2 size={13} /></button>
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
           </SectionCard>
@@ -763,19 +1254,32 @@ export default function PatientProfile() {
         <div className="space-y-6">
 
           {/* Conditions */}
-          <div className="card p-6">
-            <div className="flex items-center justify-between mb-4">
+          <div className="card p-0">
+            <div
+              className="flex items-center justify-between px-6 pt-5 pb-4 cursor-pointer select-none"
+              onClick={() => toggleCard('conditions')}
+            >
               <div className="flex items-center gap-2">
+                <span className="text-gray-300 flex-shrink-0">
+                  {collapsedCards.conditions ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
+                </span>
                 <Activity size={15} className="text-primary" />
                 <h3 className="font-body text-xs font-semibold text-gray-500 uppercase tracking-wider">Conditions</h3>
               </div>
-              <button
-                onClick={() => setAddingItem({ type: 'conditions', draft: { name: '', notes: '' } })}
-                className="p-1 text-gray-300 hover:text-primary transition-colors"
-              >
-                <Plus size={15} />
-              </button>
+              <div onClick={e => e.stopPropagation()}>
+                <button
+                  onClick={() => setAddingItem({ type: 'conditions', draft: { name: '', notes: '' } })}
+                  className="p-1 text-gray-300 hover:text-gray-500 transition-colors"
+                >
+                  <Plus size={15} />
+                </button>
+              </div>
             </div>
+            <div
+              className={`grid ${collapsedCards.conditions ? 'grid-rows-[0fr]' : 'grid-rows-[1fr]'}`}
+              style={{ transition: 'grid-template-rows 200ms ease' }}
+            >
+            <div className="overflow-hidden min-h-0"><div className="px-6 pb-6">
 
             {addingItem?.type === 'conditions' && (
               <ItemForm
@@ -807,7 +1311,7 @@ export default function PatientProfile() {
                             <p className="font-body text-sm font-medium text-gray-700">{c.name}</p>
                           </div>
                           <div className="flex items-center gap-0.5 flex-shrink-0">
-                            <button onClick={() => startEditItem('conditions', c)} className="p-1 text-gray-300 hover:text-primary transition-colors"><Edit3 size={12} /></button>
+                            <button onClick={() => startEditItem('conditions', c)} className="p-1 text-gray-300 hover:text-gray-500 transition-colors"><Edit3 size={12} /></button>
                             <button onClick={() => deleteItem('conditions', c.id)} className="p-1 text-gray-300 hover:text-red-400 transition-colors"><Trash2 size={12} /></button>
                           </div>
                         </div>
@@ -825,22 +1329,36 @@ export default function PatientProfile() {
                 ))}
               </div>
             )}
+            </div></div></div>
           </div>
 
           {/* Medications */}
-          <div className="card p-6">
-            <div className="flex items-center justify-between mb-4">
+          <div className="card p-0">
+            <div
+              className="flex items-center justify-between px-6 pt-5 pb-4 cursor-pointer select-none"
+              onClick={() => toggleCard('medications')}
+            >
               <div className="flex items-center gap-2">
+                <span className="text-gray-300 flex-shrink-0">
+                  {collapsedCards.medications ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
+                </span>
                 <Pill size={15} className="text-primary" />
                 <h3 className="font-body text-xs font-semibold text-gray-500 uppercase tracking-wider">Medications</h3>
               </div>
-              <button
-                onClick={() => setAddingItem({ type: 'medications', draft: { name: '', dose: '', frequency: '', concerns: '', notes: '' } })}
-                className="p-1 text-gray-300 hover:text-primary transition-colors"
-              >
-                <Plus size={15} />
-              </button>
+              <div onClick={e => e.stopPropagation()}>
+                <button
+                  onClick={() => setAddingItem({ type: 'medications', draft: { name: '', dose: '', frequency: '', concerns: '', notes: '' } })}
+                  className="p-1 text-gray-300 hover:text-gray-500 transition-colors"
+                >
+                  <Plus size={15} />
+                </button>
+              </div>
             </div>
+            <div
+              className={`grid ${collapsedCards.medications ? 'grid-rows-[0fr]' : 'grid-rows-[1fr]'}`}
+              style={{ transition: 'grid-template-rows 200ms ease' }}
+            >
+            <div className="overflow-hidden min-h-0"><div className="px-6 pb-6">
 
             {addingItem?.type === 'medications' && (
               <ItemForm
@@ -885,7 +1403,7 @@ export default function PatientProfile() {
                             {m.concerns && <p className="font-body text-xs text-gray-500 mt-1">{m.concerns}</p>}
                           </div>
                           <div className="flex items-center gap-0.5 flex-shrink-0">
-                            <button onClick={() => startEditItem('medications', m)} className="p-1 text-gray-300 hover:text-primary transition-colors"><Edit3 size={12} /></button>
+                            <button onClick={() => startEditItem('medications', m)} className="p-1 text-gray-300 hover:text-gray-500 transition-colors"><Edit3 size={12} /></button>
                             <button onClick={() => deleteItem('medications', m.id)} className="p-1 text-gray-300 hover:text-red-400 transition-colors"><Trash2 size={12} /></button>
                           </div>
                         </div>
@@ -903,12 +1421,14 @@ export default function PatientProfile() {
                 ))}
               </div>
             )}
+            </div></div></div>
           </div>
 
           {/* Care Team */}
           <SectionCard
             title="Care Team" icon={<Stethoscope size={15} />}
             addButton={{ onClick: () => setAddingItem({ type: 'providers', draft: { name: '', role: '', practice: '', phone: '', notes: '' } }) }}
+            collapsed={!!collapsedCards.care_team} onToggle={() => toggleCard('care_team')}
           >
             {addingItem?.type === 'providers' && (
               <ItemForm
@@ -951,7 +1471,7 @@ export default function PatientProfile() {
                             {p.phone && <InfoRow icon={<Phone size={11} />} value={p.phone} small />}
                           </div>
                           <div className="flex items-center gap-0.5 flex-shrink-0">
-                            <button onClick={() => startEditItem('providers', p)} className="p-1 text-gray-300 hover:text-primary transition-colors"><Edit3 size={12} /></button>
+                            <button onClick={() => startEditItem('providers', p)} className="p-1 text-gray-300 hover:text-gray-500 transition-colors"><Edit3 size={12} /></button>
                             <button onClick={() => deleteItem('providers', p.id)} className="p-1 text-gray-300 hover:text-red-400 transition-colors"><Trash2 size={12} /></button>
                           </div>
                         </div>
@@ -974,7 +1494,8 @@ export default function PatientProfile() {
           {/* Caretakers */}
           <SectionCard
             title="Caretakers" icon={<Users size={15} />}
-            addButton={{ onClick: () => setAddingItem({ type: 'caretakers', draft: { name: '', role: '', phone: '', schedule_days: [], schedule_time: '', notes: '' } }) }}
+            addButton={{ onClick: () => setAddingItem({ type: 'caretakers', draft: { name: '', role: '', phone: '', scheduleBlocks: [{ tempId: '0', days: [], start_time: '', end_time: '' }] } }) }}
+            collapsed={!!collapsedCards.caretakers} onToggle={() => toggleCard('caretakers')}
           >
             {addingItem?.type === 'caretakers' && (
               <CaretakerForm
@@ -1004,22 +1525,29 @@ export default function PatientProfile() {
                             {ct.phone && <InfoRow icon={<Phone size={11} />} value={ct.phone} small />}
                           </div>
                           <div className="flex items-center gap-0.5">
-                            <button onClick={() => startEditItem('caretakers', ct)} className="p-1 text-gray-300 hover:text-primary transition-colors"><Edit3 size={12} /></button>
+                            <button onClick={() => startEditItem('caretakers', ct)} className="p-1 text-gray-300 hover:text-gray-500 transition-colors"><Edit3 size={12} /></button>
                             <button onClick={() => deleteItem('caretakers', ct.id)} className="p-1 text-gray-300 hover:text-red-400 transition-colors"><Trash2 size={12} /></button>
                           </div>
                         </div>
-                        <div>
-                          <p className="font-body text-[10px] text-gray-400 uppercase tracking-wide mb-1.5">
-                            Schedule{ct.schedule_time && ` · ${ct.schedule_time}`}
-                          </p>
-                          <div className="flex gap-1">
-                            {DAYS.map(day => (
-                              <div key={day} className={`flex-1 text-center rounded-md py-1.5 text-[10px] font-body font-semibold ${ct.schedule_days?.includes(day) ? 'bg-primary text-white' : 'bg-gray-100 text-gray-300'}`}>
-                                {day[0]}
-                              </div>
-                            ))}
-                          </div>
-                        </div>
+                        {/* Schedule display — grouped blocks */}
+                        {(() => {
+                          const rows = caretakerSchedules[ct.id]
+                          if (!rows || rows.length === 0) return null
+                          const groups = groupScheduleRows(rows)
+                          return (
+                            <div className="mb-2 space-y-1">
+                              <p className="font-body text-[10px] text-gray-400 uppercase tracking-wide mb-1">Schedule</p>
+                              {groups.map((g, i) => (
+                                <p key={i} className="font-body text-xs text-gray-600">
+                                  <span className="font-medium">{g.days.join(', ')}</span>
+                                  {(g.start_time || g.end_time) && (
+                                    <span className="text-gray-400"> · {formatTime(g.start_time)}{g.end_time ? ` – ${formatTime(g.end_time)}` : ''}</span>
+                                  )}
+                                </p>
+                              ))}
+                            </div>
+                          )
+                        })()}
                         <ItemNotesField
                           itemKey={`caretakers-${ct.id}`}
                           notes={ct.notes || ''}
@@ -1037,218 +1565,315 @@ export default function PatientProfile() {
           </SectionCard>
         </div>
 
-        {/* ── RIGHT: Appointments / Notes / Documents ── */}
+        {/* ── RIGHT: Appointments / Notes ── */}
         <div className="space-y-6">
 
           {/* Appointments */}
-          <SectionCard title="Appointments" icon={<Calendar size={15} />}>
-            {/* Upcoming */}
-            <div className="space-y-2 mb-4">
-              {upcomingAppts.length === 0 ? (
-                <p className="font-body text-xs text-gray-400">No upcoming appointments</p>
-              ) : (
-                upcomingAppts.map(appt => (
-                  <div key={appt.id} className="bg-primary-light rounded-xl px-4 py-3">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex-1 min-w-0">
-                        <p className="font-body text-sm font-semibold text-gray-700">{appt.title}</p>
-                        <p className="font-body text-xs text-primary font-medium mt-0.5">
-                          {format(parseISO(appt.appointment_date), 'MMM d, yyyy · h:mm a')}
-                        </p>
-                        {appt.provider && <p className="font-body text-xs text-gray-400">with {appt.provider}</p>}
-                        {appt.location && <p className="font-body text-xs text-gray-400">{appt.location}</p>}
-                        {appt.notes && <p className="font-body text-xs text-gray-500 mt-1 italic">{appt.notes}</p>}
-                      </div>
-                      <div className="flex items-center gap-0.5 flex-shrink-0">
-                        <button onClick={() => markApptComplete(appt.id)} title="Mark complete" className="p-1 text-gray-300 hover:text-primary transition-colors"><CheckCircle size={13} /></button>
-                        <button onClick={() => setApptModal({ ...appt })} title="Edit" className="p-1 text-gray-300 hover:text-primary transition-colors"><Edit3 size={12} /></button>
-                        <button onClick={() => deleteAppointment(appt.id)} title="Delete" className="p-1 text-gray-300 hover:text-red-400 transition-colors"><Trash2 size={12} /></button>
-                      </div>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
+          <SectionCard title="Appointments" icon={<Calendar size={15} />}
+            addButton={{ onClick: () => setApptModal({ mode: 'new', draft: { title: '', appointment_type: '', provider: '', location: '', appointment_date: '', notes: '' } }) }}
+            collapsed={!!collapsedCards.appointments} onToggle={() => toggleCard('appointments')}
+          >
+            {/* Calendar widget */}
+            <CalendarWidget
+              viewDate={calViewDate}
+              onPrev={() => setCalViewDate(d => subMonths(d, 1))}
+              onNext={() => setCalViewDate(d => addMonths(d, 1))}
+              appointments={appointments}
+              selectedDate={calSelectedDate}
+              onSelectDate={d => setCalSelectedDate(prev => prev === d ? null : d)}
+              onView={appt => setApptModal({ mode: 'view', appt })}
+              onToday={() => { setCalViewDate(new Date()); setCalSelectedDate(format(new Date(), 'yyyy-MM-dd')) }}
+            />
 
-            {/* Add form */}
-            {showApptForm ? (
-              <div className="border border-gray-100 rounded-xl p-4 space-y-2.5 mb-3">
-                <input className="input text-sm" placeholder="Title *" value={newAppt.title} onChange={e => setNewAppt(p => ({ ...p, title: e.target.value }))} />
-                <input className="input text-sm" type="datetime-local" value={newAppt.appointment_date} onChange={e => setNewAppt(p => ({ ...p, appointment_date: e.target.value }))} />
-                <input className="input text-sm" placeholder="Provider" value={newAppt.provider} onChange={e => setNewAppt(p => ({ ...p, provider: e.target.value }))} />
-                <input className="input text-sm" placeholder="Location" value={newAppt.location} onChange={e => setNewAppt(p => ({ ...p, location: e.target.value }))} />
-                <textarea className="input text-sm resize-none" rows={2} placeholder="Notes" value={newAppt.notes} onChange={e => setNewAppt(p => ({ ...p, notes: e.target.value }))} />
-                <div className="flex gap-2">
-                  <button onClick={addAppointment} className="btn-primary flex-1 py-2 text-xs">Save</button>
-                  <button onClick={() => setShowApptForm(false)} className="btn-ghost flex-1 py-2 text-xs">Cancel</button>
-                </div>
+            {/* Upcoming search + list */}
+            <div className="mt-5">
+              <p className="font-body text-[10px] text-gray-400 uppercase tracking-wider mb-2">Upcoming</p>
+              {/* Search bar */}
+              <div className="relative mb-3">
+                <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-300 pointer-events-none" />
+                <input
+                  type="text"
+                  className="input pl-8 text-sm"
+                  placeholder="Search upcoming…"
+                  value={upcomingApptSearch}
+                  onChange={e => setUpcomingApptSearch(e.target.value)}
+                />
               </div>
-            ) : (
-              <button onClick={() => setShowApptForm(true)} className="flex items-center gap-1.5 text-xs font-body text-primary hover:underline mb-3">
-                <Plus size={12} /> Add appointment
-              </button>
-            )}
+              {(() => {
+                const q = upcomingApptSearch.trim().toLowerCase()
+                const displayed = q
+                  ? upcomingAppts.filter(a =>
+                      (a.title || '').toLowerCase().includes(q) ||
+                      (a.provider || '').toLowerCase().includes(q) ||
+                      (a.location || '').toLowerCase().includes(q)
+                    )
+                  : upcomingAppts.slice(0, 3)
+                if (displayed.length === 0) return (
+                  <p className="font-body text-xs text-gray-400">{q ? 'No matches' : 'No upcoming appointments'}</p>
+                )
+                return (
+                  <div className="space-y-2">
+                    {displayed.map(appt => {
+                      const typeColor = appt.appointment_type
+                        ? (APPT_TYPE_COLORS[appt.appointment_type] || APPT_TYPE_COLORS['Other'])
+                        : null
+                      return (
+                        <div
+                          key={appt.id}
+                          onClick={() => setApptModal({ mode: 'view', appt })}
+                          className="bg-primary-light rounded-xl px-3 py-2.5 cursor-pointer hover:bg-primary/10 transition-colors"
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="flex-1 min-w-0">
+                              {typeColor && (
+                                <span className={`tag border text-[10px] mb-1 inline-flex ${typeColor}`}>
+                                  {appt.appointment_type}
+                                </span>
+                              )}
+                              <p className="font-body text-sm font-semibold text-gray-700 truncate">{appt.title}</p>
+                              <p className="font-body text-xs text-primary font-medium mt-0.5">
+                                {format(parseISO(appt.appointment_date), 'MMM d · h:mm a')}
+                              </p>
+                              {appt.provider && <p className="font-body text-xs text-gray-500">with {appt.provider}</p>}
+                            </div>
+                            <div className="flex items-center gap-0.5 flex-shrink-0" onClick={e => e.stopPropagation()}>
+                              <button onClick={() => markApptComplete(appt.id)} title="Mark complete" className="p-1 text-gray-300 hover:text-primary transition-colors"><CheckCircle size={13} /></button>
+                              <button onClick={() => deleteAppointment(appt.id)} title="Delete" className="p-1 text-gray-300 hover:text-red-400 transition-colors"><Trash2 size={12} /></button>
+                            </div>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )
+              })()}
+            </div>
 
             {/* Past / Completed */}
             {pastAppts.length > 0 && (
-              <div className="border-t border-gray-50 pt-3">
+              <div className="border-t border-gray-100 pt-3 mt-4">
                 <button
-                  onClick={() => setShowPastAppts(p => !p)}
+                  onClick={() => { setShowPastAppts(p => !p); setPastApptSearch('') }}
                   className="flex items-center gap-1.5 text-xs font-body text-gray-400 hover:text-gray-600 transition-colors"
                 >
                   {showPastAppts ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
                   Past Appointments ({pastAppts.length})
                 </button>
-                {showPastAppts && (
-                  <div className="mt-2 space-y-2">
-                    {pastAppts.map(appt => (
-                      <div key={appt.id} className="bg-gray-50 rounded-xl px-4 py-3 flex items-start justify-between gap-2 opacity-75">
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <p className="font-body text-sm font-medium text-gray-600">{appt.title}</p>
-                            {appt.completed && (
-                              <span className="tag bg-gray-100 text-gray-500 text-[10px]">Completed</span>
-                            )}
-                          </div>
-                          <p className="font-body text-xs text-gray-400">{format(parseISO(appt.appointment_date), 'MMM d, yyyy')}</p>
-                          {appt.provider && <p className="font-body text-xs text-gray-400">with {appt.provider}</p>}
-                        </div>
-                        <button onClick={() => deleteAppointment(appt.id)} className="p-1 text-gray-200 hover:text-red-400 transition-colors flex-shrink-0">
-                          <Trash2 size={12} />
-                        </button>
+                {showPastAppts && (() => {
+                  const q = pastApptSearch.trim().toLowerCase()
+                  const filtered = q
+                    ? pastAppts.filter(a =>
+                        (a.title || '').toLowerCase().includes(q) ||
+                        (a.provider || '').toLowerCase().includes(q) ||
+                        (a.location || '').toLowerCase().includes(q)
+                      )
+                    : pastAppts
+                  return (
+                    <div className="mt-2 space-y-2">
+                      <div className="relative">
+                        <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-300 pointer-events-none" />
+                        <input
+                          type="text"
+                          className="input pl-7 text-xs py-1.5"
+                          placeholder="Search past appointments…"
+                          value={pastApptSearch}
+                          onChange={e => setPastApptSearch(e.target.value)}
+                        />
                       </div>
-                    ))}
-                  </div>
-                )}
+                      {filtered.length === 0 ? (
+                        <p className="font-body text-xs text-gray-400">No matches</p>
+                      ) : (
+                        filtered.map(appt => {
+                          const typeColor = appt.appointment_type
+                            ? (APPT_TYPE_COLORS[appt.appointment_type] || APPT_TYPE_COLORS['Other'])
+                            : null
+                          return (
+                            <div
+                              key={appt.id}
+                              onClick={() => setApptModal({ mode: 'view', appt })}
+                              className="bg-gray-50 rounded-xl px-3 py-2.5 flex items-start justify-between gap-2 cursor-pointer hover:bg-gray-100 transition-colors"
+                            >
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-1.5 flex-wrap mb-0.5">
+                                  {typeColor && (
+                                    <span className={`tag border text-[10px] flex-shrink-0 ${typeColor}`}>
+                                      {appt.appointment_type}
+                                    </span>
+                                  )}
+                                  <span className={`tag text-[10px] flex-shrink-0 ${appt.completed ? 'bg-green-50 text-green-600' : 'bg-gray-100 text-gray-400'}`}>
+                                    {appt.completed ? 'Completed' : 'Past'}
+                                  </span>
+                                </div>
+                                <p className="font-body text-sm font-medium text-gray-500 truncate">{appt.title}</p>
+                                <p className="font-body text-xs text-gray-400 mt-0.5">
+                                  {format(parseISO(appt.appointment_date), 'MMM d, yyyy · h:mm a')}
+                                </p>
+                                {appt.provider && <p className="font-body text-xs text-gray-400">with {appt.provider}</p>}
+                                {appt.location && <p className="font-body text-xs text-gray-400">{appt.location}</p>}
+                              </div>
+                              <button
+                                onClick={e => { e.stopPropagation(); deleteAppointment(appt.id) }}
+                                className="p-1 text-gray-300 hover:text-red-400 transition-colors flex-shrink-0"
+                              >
+                                <Trash2 size={12} />
+                              </button>
+                            </div>
+                          )
+                        })
+                      )}
+                    </div>
+                  )
+                })()}
               </div>
             )}
           </SectionCard>
 
-          {/* Appointment edit modal */}
+          {/* Appointment modal (view / edit / new) */}
           {apptModal && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={e => { if (e.target === e.currentTarget) setApptModal(null) }}>
-              <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" />
-              <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md flex flex-col overflow-hidden">
-                <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-                  <h2 className="font-heading text-xl font-semibold text-gray-800">Edit Appointment</h2>
-                  <button onClick={() => setApptModal(null)} className="p-1.5 text-gray-400 hover:text-gray-600 transition-colors"><X size={18} /></button>
-                </div>
-                <div className="px-6 py-5 space-y-3">
-                  <Field label="Title *">
-                    <input className="input" value={apptModal.title || ''} onChange={e => setApptModal(p => ({ ...p, title: e.target.value }))} />
-                  </Field>
-                  <Field label="Date & Time">
-                    <input type="datetime-local" className="input" value={apptModal.appointment_date || ''} onChange={e => setApptModal(p => ({ ...p, appointment_date: e.target.value }))} />
-                  </Field>
-                  <Field label="Provider">
-                    <input className="input" value={apptModal.provider || ''} onChange={e => setApptModal(p => ({ ...p, provider: e.target.value }))} />
-                  </Field>
-                  <Field label="Location">
-                    <input className="input" value={apptModal.location || ''} onChange={e => setApptModal(p => ({ ...p, location: e.target.value }))} />
-                  </Field>
-                  <Field label="Notes">
-                    <textarea className="input resize-none" rows={3} value={apptModal.notes || ''} onChange={e => setApptModal(p => ({ ...p, notes: e.target.value }))} />
-                  </Field>
-                </div>
-                <div className="flex gap-2 px-6 py-4 border-t border-gray-100">
-                  <button onClick={() => setApptModal(null)} className="btn-ghost flex-1 py-2 text-sm">Cancel</button>
-                  <button onClick={updateAppointment} className="btn-primary flex-1 py-2 text-sm">Save Changes</button>
-                </div>
-              </div>
-            </div>
+            <AppointmentModal
+              modal={apptModal}
+              onClose={() => setApptModal(null)}
+              onSave={saveApptModal}
+              onDelete={apptId => { deleteAppointment(apptId); setApptModal(null) }}
+              saving={savingAppt}
+            />
           )}
 
           {/* Notes */}
-          <div className="card p-6">
+          <div className="card p-0">
             {/* Header */}
-            <div className="flex items-center justify-between mb-5">
+            <div
+              className="flex items-center justify-between px-6 pt-5 pb-4 cursor-pointer select-none"
+              onClick={() => toggleCard('notes')}
+            >
               <div className="flex items-center gap-2">
+                <span className="text-gray-300 flex-shrink-0">
+                  {collapsedCards.notes ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
+                </span>
                 <FileText size={15} className="text-primary" />
                 <h3 className="font-body text-xs font-semibold text-gray-500 uppercase tracking-wider">Notes</h3>
-                <span className="tag bg-primary-light text-primary">{notes.length}</span>
-                {deletedNotes.length > 0 && (
-                  <span className="tag bg-gray-100 text-gray-400">{deletedNotes.length} deleted</span>
-                )}
+                <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-primary-light text-primary font-body text-[10px] font-semibold">
+                  {notes.length}
+                </span>
               </div>
-              <button
-                onClick={() => setNoteModal({ mode: 'new' })}
-                className="btn-primary py-2 px-4 text-xs flex items-center gap-1.5"
-              >
-                <Plus size={12} /> Add Note
-              </button>
+              <div onClick={e => e.stopPropagation()}>
+                <button
+                  onClick={() => setNoteModal({ mode: 'new' })}
+                  className="p-1.5 text-gray-300 hover:text-gray-500 transition-colors"
+                >
+                  <Plus size={14} />
+                </button>
+              </div>
             </div>
-            {/* Filters */}
-            {notes.length > 0 && (
-              <div className="space-y-2.5 mb-4">
-                {/* Row 1: search + type */}
-                <div className="flex items-center gap-2">
-                  <div className="relative flex-1">
-                    <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-300 pointer-events-none" />
-                    <input
-                      type="text"
-                      className="input pl-8 text-sm"
-                      placeholder="Search notes…"
-                      value={noteSearch}
-                      onChange={e => setNoteSearch(e.target.value)}
-                    />
-                  </div>
-                  <select
-                    className="input text-sm w-48 flex-shrink-0"
-                    value={noteTypeFilter}
-                    onChange={e => setNoteTypeFilter(e.target.value)}
-                  >
-                    <option value="All">All types</option>
-                    {NOTE_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
-                  </select>
-                </div>
+            <div
+              className={`grid ${collapsedCards.notes ? 'grid-rows-[0fr]' : 'grid-rows-[1fr]'}`}
+              style={{ transition: 'grid-template-rows 200ms ease' }}
+            >
+            <div className="overflow-hidden min-h-0"><div className="px-6 pb-6">
 
-                {/* Row 2: date filter */}
-                <div className="flex items-center gap-2 flex-wrap">
-                  <div className="flex items-center gap-1.5">
-                    <Calendar size={13} className="text-gray-300 flex-shrink-0" />
-                    <input
-                      type="date"
-                      className="input text-sm w-38"
-                      value={noteDateFrom}
-                      onChange={e => setNoteDateFrom(e.target.value)}
-                    />
-                  </div>
-                  <button
-                    onClick={() => { setNoteDateRange(r => !r); setNoteDateTo('') }}
-                    className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg font-body text-[11px] font-medium border transition-all ${
-                      noteDateRange
-                        ? 'bg-primary text-white border-primary'
-                        : 'bg-white text-gray-400 border-gray-200 hover:border-primary hover:text-primary'
-                    }`}
-                  >
-                    Range
-                  </button>
-                  {noteDateRange && (
-                    <input
-                      type="date"
-                      className="input text-sm w-38"
-                      value={noteDateTo}
-                      onChange={e => setNoteDateTo(e.target.value)}
-                    />
+            {/* Search + Filters */}
+            <div className="mb-4" ref={noteFiltersRef}>
+              <div className="flex items-center gap-2">
+                <div className="relative flex-1">
+                  <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-300 pointer-events-none" />
+                  <input
+                    type="text"
+                    className="input pl-8 text-sm"
+                    placeholder="Search notes…"
+                    value={noteSearch}
+                    onChange={e => setNoteSearch(e.target.value)}
+                  />
+                </div>
+                <button
+                  onClick={() => setShowNoteFilters(v => !v)}
+                  className={`relative flex items-center gap-1.5 px-3 py-2 rounded-lg border font-body text-xs font-medium transition-all flex-shrink-0 ${
+                    showNoteFilters
+                      ? 'bg-primary-light border-primary/30 text-primary'
+                      : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300 hover:text-gray-700'
+                  }`}
+                >
+                  <SlidersHorizontal size={13} />
+                  Filters
+                  {filtersActive && (
+                    <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-primary" />
                   )}
-                  {noteDateFrom && (
-                    <button
-                      onClick={() => { setNoteDateFrom(''); setNoteDateTo(''); setNoteDateRange(false) }}
-                      className="flex items-center gap-1 text-xs font-body text-gray-400 hover:text-red-400 transition-colors"
+                </button>
+              </div>
+
+              {/* Filter panel */}
+              {showNoteFilters && (
+                <div className="mt-2 p-4 bg-gray-50 rounded-xl border border-gray-100 space-y-3">
+                  {/* Type */}
+                  <div>
+                    <label className="label">Type</label>
+                    <select
+                      className="input text-sm"
+                      value={noteTypeFilter}
+                      onChange={e => setNoteTypeFilter(e.target.value)}
                     >
-                      <X size={12} /> Clear date
+                      <option value="All">All Types</option>
+                      {NOTE_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                    </select>
+                  </div>
+                  {/* Date */}
+                  <div>
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <label className="label mb-0">Date</label>
+                      <button
+                        onClick={() => { setNoteDateRange(r => !r); setNoteDateTo('') }}
+                        className={`flex items-center gap-1 px-2 py-0.5 rounded font-body text-[10px] font-medium border transition-all ${
+                          noteDateRange
+                            ? 'bg-primary text-white border-primary'
+                            : 'bg-white text-gray-400 border-gray-200 hover:border-primary hover:text-primary'
+                        }`}
+                      >
+                        Range
+                      </button>
+                    </div>
+                    <div className="space-y-2">
+                      <div>
+                        {noteDateRange && <label className="label">From</label>}
+                        <input
+                          type="date"
+                          className="input text-sm w-full"
+                          value={noteDateFrom}
+                          onChange={e => setNoteDateFrom(e.target.value)}
+                        />
+                      </div>
+                      {noteDateRange && (
+                        <div>
+                          <label className="label">To</label>
+                          <input
+                            type="date"
+                            className="input text-sm w-full"
+                            value={noteDateTo}
+                            onChange={e => setNoteDateTo(e.target.value)}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  {/* Clear all */}
+                  <div className="flex justify-end pt-1">
+                    <button
+                      onClick={() => { setNoteTypeFilter('All'); setNoteDateFrom(''); setNoteDateTo(''); setNoteDateRange(false) }}
+                      className="font-body text-xs text-primary hover:underline transition-colors"
+                    >
+                      Clear all filters
                     </button>
-                  )}
+                  </div>
                 </div>
+              )}
 
-                {/* Results count */}
-                <p className="font-body text-[11px] text-gray-400">
+              {/* Results count when filtered */}
+              {(noteSearch.trim() || filtersActive) && notes.length > 0 && (
+                <p className="font-body text-[11px] text-gray-400 mt-2">
                   {filteredNotes.length === notes.length
                     ? `${notes.length} note${notes.length !== 1 ? 's' : ''}`
                     : `${filteredNotes.length} of ${notes.length} note${notes.length !== 1 ? 's' : ''} match`}
                 </p>
-              </div>
-            )}
+              )}
+            </div>
 
             {/* Notes feed */}
             {notes.length === 0 ? (
@@ -1256,11 +1881,11 @@ export default function PatientProfile() {
                 No notes yet — click Add Note to create one
               </p>
             ) : filteredNotes.length === 0 ? (
-              <p className="font-body text-xs text-gray-400 text-center py-6">
+              <p className="font-body text-xs text-gray-400 text-center py-4">
                 No notes match your search.
               </p>
             ) : (
-              <div className="space-y-2">
+              <div className="divide-y divide-gray-100">
                 {filteredNotes.map(note => {
                   const typeKey = NOTE_TYPES.includes(note.note_type) ? note.note_type : 'Other'
                   const typeLabel = typeKey === 'Other' && note.note_type && note.note_type !== 'Other'
@@ -1277,30 +1902,28 @@ export default function PatientProfile() {
                     <div
                       key={note.id}
                       onClick={() => setNoteModal({ mode: 'view', note })}
-                      className="flex items-start justify-between gap-3 px-5 py-3.5 border border-gray-100 rounded-xl cursor-pointer hover:bg-gray-50/60 hover:border-gray-200 transition-all"
+                      className="flex items-center gap-3 py-4 cursor-pointer hover:bg-gray-50/60 transition-all -mx-1 px-1 rounded-lg group"
                     >
-                      <div className="flex items-start gap-3 min-w-0 flex-1">
-                        <span className={`tag border text-[10px] flex-shrink-0 mt-0.5 ${colorClass}`}>{typeLabel}</span>
-                        <div className="min-w-0">
-                          <p className="font-body text-sm font-medium text-gray-700 truncate">
-                            {note.title || '(Untitled)'}
+                      <span className={`tag border text-[10px] flex-shrink-0 ${colorClass}`}>{typeLabel}</span>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-body text-sm font-semibold text-gray-800 truncate">
+                          {note.title || '(Untitled)'}
+                        </p>
+                        {bodyOnly && (
+                          <span className="inline-block mt-0.5 font-body text-[10px] text-primary bg-primary-light rounded px-1.5 py-0.5">
+                            Found in note body
+                          </span>
+                        )}
+                        {snippet && (
+                          <p className="font-body text-xs text-gray-400 mt-0.5 leading-relaxed">
+                            {snippet.before}
+                            <mark className="bg-yellow-100 text-gray-700 rounded px-0.5 not-italic font-medium">{snippet.match}</mark>
+                            {snippet.after}
                           </p>
-                          {bodyOnly && (
-                            <span className="inline-block mt-1 font-body text-[10px] text-primary bg-primary-light rounded px-1.5 py-0.5">
-                              Found in note body
-                            </span>
-                          )}
-                          {snippet && (
-                            <p className="font-body text-xs text-gray-400 mt-1 leading-relaxed">
-                              {snippet.before}
-                              <mark className="bg-yellow-100 text-gray-700 rounded px-0.5 not-italic font-medium">{snippet.match}</mark>
-                              {snippet.after}
-                            </p>
-                          )}
-                        </div>
+                        )}
                       </div>
-                      <span className="font-body text-xs text-gray-400 flex-shrink-0 mt-0.5">
-                        {dateStr ? format(parseISO(dateStr), 'MMM d, yyyy') : ''}
+                      <span className="font-body text-[11px] text-gray-400 flex-shrink-0">
+                        {dateStr ? format(parseISO(dateStr), 'MMM d') : ''}
                       </span>
                     </div>
                   )
@@ -1310,51 +1933,43 @@ export default function PatientProfile() {
 
             {/* Deleted Notes */}
             {deletedNotes.length > 0 && (
-              <div className="mt-6 border-t border-gray-100 pt-4">
+              <div className="mt-4 pt-3 border-t border-gray-100">
                 <button
                   onClick={() => setShowDeletedNotes(v => !v)}
-                  className="flex items-center gap-1.5 text-xs font-body text-gray-400 hover:text-gray-600 transition-colors"
+                  className="flex items-center gap-1 font-body text-[11px] text-gray-300 hover:text-gray-500 transition-colors"
                 >
-                  {showDeletedNotes ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-                  Deleted Notes ({deletedNotes.length})
+                  {showDeletedNotes ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+                  {deletedNotes.length} deleted
                 </button>
 
                 {showDeletedNotes && (
-                  <div className="mt-3 space-y-2">
+                  <div className="mt-2 space-y-1">
                     {deletedNotes.map(note => {
-                      const typeKey = NOTE_TYPES.includes(note.note_type) ? note.note_type : 'Other'
-                      const typeLabel = typeKey === 'Other' && note.note_type && note.note_type !== 'Other'
-                        ? note.note_type : typeKey
-                      const colorClass = NOTE_TYPE_COLORS[typeKey] || NOTE_TYPE_COLORS['General']
                       const deletedStr = note.deleted_at
                         ? format(parseISO(note.deleted_at), 'MMM d, yyyy')
                         : ''
                       return (
                         <div
                           key={note.id}
-                          className="flex items-center justify-between gap-3 px-4 py-3 bg-gray-50 border border-gray-100 rounded-xl opacity-70"
+                          className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg bg-gray-50"
                         >
-                          <div className="flex items-center gap-3 min-w-0 flex-1">
-                            <span className={`tag border text-[10px] flex-shrink-0 ${colorClass}`}>{typeLabel}</span>
-                            <div className="min-w-0">
-                              <p className="font-body text-sm font-medium text-gray-500 truncate">
-                                {note.title || '(Untitled)'}
-                              </p>
-                              {deletedStr && (
-                                <p className="font-body text-[10px] text-gray-400 mt-0.5">Deleted {deletedStr}</p>
-                              )}
-                            </div>
+                          <div className="min-w-0 flex-1">
+                            <p className="font-body text-xs text-gray-400 truncate">{note.title || '(Untitled)'}</p>
+                            {deletedStr && (
+                              <p className="font-body text-[10px] text-gray-300">Deleted {deletedStr}</p>
+                            )}
                           </div>
                           <div className="flex items-center gap-2 flex-shrink-0">
                             <button
-                              onClick={() => restoreNote(note.id)}
-                              className="px-2.5 py-1 rounded-lg font-body text-[11px] font-medium text-primary bg-primary-light hover:bg-primary/20 transition-colors"
+                              onClick={e => { e.stopPropagation(); restoreNote(note.id) }}
+                              className="font-body text-[10px] text-primary hover:underline"
                             >
                               Restore
                             </button>
+                            <span className="text-gray-200 text-xs">·</span>
                             <button
-                              onClick={() => permanentDeleteNote(note.id)}
-                              className="px-2.5 py-1 rounded-lg font-body text-[11px] font-medium text-red-500 bg-red-50 hover:bg-red-100 transition-colors"
+                              onClick={e => { e.stopPropagation(); permanentDeleteNote(note.id) }}
+                              className="font-body text-[10px] text-red-400 hover:underline"
                             >
                               Delete forever
                             </button>
@@ -1371,6 +1986,7 @@ export default function PatientProfile() {
             {noteModal && (
               <NoteModal
                 modal={noteModal}
+                patientName={patient ? `${patient.first_name} ${patient.last_name}` : ''}
                 onClose={() => setNoteModal(null)}
                 onSave={saveNote}
                 onUpdate={updateNote}
@@ -1378,43 +1994,9 @@ export default function PatientProfile() {
                 saving={savingNote}
               />
             )}
+            </div></div></div>
           </div>
 
-          {/* Documents */}
-          <SectionCard title="Documents" icon={<Paperclip size={15} />}>
-            <div className="mb-3">
-              <input ref={fileInputRef} type="file" className="hidden" onChange={uploadDocument} />
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                disabled={uploadingDoc}
-                className="flex items-center gap-1.5 text-xs font-body text-primary hover:underline disabled:opacity-50"
-              >
-                <Plus size={12} />
-                {uploadingDoc ? 'Uploading…' : 'Upload document'}
-              </button>
-            </div>
-            {documents.length === 0 ? (
-              <p className="font-body text-xs text-gray-400">No documents uploaded</p>
-            ) : (
-              <div className="space-y-2">
-                {documents.map(doc => (
-                  <div key={doc.id} className="flex items-center justify-between gap-2 bg-gray-50 rounded-xl px-3 py-2.5">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <FileText size={13} className="text-primary flex-shrink-0" />
-                      <div className="min-w-0">
-                        <p className="font-body text-xs font-medium text-gray-700 truncate">{doc.name}</p>
-                        <p className="font-body text-[10px] text-gray-400">{format(parseISO(doc.created_at), 'MMM d, yyyy')}</p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-1 flex-shrink-0">
-                      <button onClick={() => downloadDocument(doc)} className="p-1 text-gray-300 hover:text-primary transition-colors"><Download size={13} /></button>
-                      <button onClick={() => deleteDocument(doc)} className="p-1 text-gray-300 hover:text-red-400 transition-colors"><Trash2 size={13} /></button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </SectionCard>
         </div>
       </div>
 
@@ -1524,7 +2106,7 @@ export default function PatientProfile() {
                               <p className="font-body text-sm text-gray-700">{g.goal_text}</p>
                             </div>
                             <div className="flex items-center gap-0.5 flex-shrink-0">
-                              <button onClick={() => setPanelGoalEditing({ ...g })} className="p-1 text-gray-300 hover:text-primary transition-colors"><Edit3 size={12} /></button>
+                              <button onClick={() => setPanelGoalEditing({ ...g })} className="p-1 text-gray-300 hover:text-gray-500 transition-colors"><Edit3 size={12} /></button>
                               <button onClick={() => panelDeleteGoal(g.id)} className="p-1 text-gray-300 hover:text-red-400 transition-colors"><Trash2 size={12} /></button>
                             </div>
                           </div>
@@ -1702,7 +2284,8 @@ export default function PatientProfile() {
                               )}
                             </div>
                             <div className="flex items-center gap-0.5 flex-shrink-0">
-                              <button onClick={() => setPanelHospEditing({ ...h })} className="p-1 text-gray-300 hover:text-primary transition-colors"><Edit3 size={12} /></button>
+
+                              <button onClick={() => setPanelHospEditing({ ...h })} className="p-1 text-gray-300 hover:text-gray-500 transition-colors"><Edit3 size={12} /></button>
                               <button onClick={() => panelDeleteHosp(h.id)} className="p-1 text-gray-300 hover:text-red-400 transition-colors"><Trash2 size={12} /></button>
                             </div>
                           </div>
@@ -1717,28 +2300,45 @@ export default function PatientProfile() {
           </div>
         </>
       )}
+
+      {/* ── DOC PREVIEW MODAL ── */}
+      {docPreview && (
+        <DocPreviewModal
+          doc={docPreview.doc}
+          url={docPreview.url}
+          onClose={() => setDocPreview(null)}
+          onDownload={() => downloadDocument(docPreview.doc)}
+        />
+      )}
     </div>
   )
 }
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
-function SectionCard({ title, icon, children, accentColor = 'primary', onEdit, editing, onSave, onCancel, saving, addButton }) {
+function SectionCard({ title, icon, children, accentColor = 'primary', onEdit, editing, onSave, onCancel, saving, addButton, collapsed, onToggle, titleExtra }) {
   return (
-    <div className="card p-6">
-      <div className="flex items-center justify-between mb-4">
+    <div className="card p-0">
+      <div
+        className={`flex items-center justify-between px-6 pt-5 pb-4 ${onToggle && !editing ? 'cursor-pointer select-none' : ''}`}
+        onClick={onToggle && !editing ? onToggle : undefined}
+      >
         <div className="flex items-center gap-2">
+          <span className="text-gray-300 flex-shrink-0">
+            {collapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
+          </span>
           <span className={accentColor === 'mauve' ? 'text-mauve' : 'text-primary'}>{icon}</span>
           <h3 className="font-body text-xs font-semibold text-gray-500 uppercase tracking-wider">{title}</h3>
+          {titleExtra && <div onClick={e => e.stopPropagation()}>{titleExtra}</div>}
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
           {addButton && !editing && (
-            <button onClick={addButton.onClick} className="p-1.5 text-gray-300 hover:text-primary transition-colors">
+            <button onClick={addButton.onClick} className="p-1.5 text-gray-300 hover:text-gray-500 transition-colors">
               <Plus size={14} />
             </button>
           )}
           {onEdit && !editing && (
-            <button onClick={onEdit} className="p-1.5 text-gray-300 hover:text-primary transition-colors">
+            <button onClick={onEdit} className="p-1.5 text-gray-300 hover:text-gray-500 transition-colors">
               <Edit3 size={14} />
             </button>
           )}
@@ -1758,7 +2358,16 @@ function SectionCard({ title, icon, children, accentColor = 'primary', onEdit, e
           )}
         </div>
       </div>
-      {children}
+      <div
+        className={`grid ${collapsed ? 'grid-rows-[0fr]' : 'grid-rows-[1fr]'}`}
+        style={{ transition: 'grid-template-rows 200ms ease' }}
+      >
+        <div className="overflow-hidden min-h-0">
+          <div className="px-6 pb-6">
+            {children}
+          </div>
+        </div>
+      </div>
     </div>
   )
 }
@@ -1863,10 +2472,25 @@ function ItemForm({ fields, draft, onChange, onSave, onCancel }) {
 }
 
 function CaretakerForm({ draft, onChange, onSave, onCancel }) {
-  const toggleDay = day => {
-    const days = draft.schedule_days || []
-    onChange({ ...draft, schedule_days: days.includes(day) ? days.filter(d => d !== day) : [...days, day] })
+  const blocks = draft.scheduleBlocks || [{ tempId: '0', days: [], start_time: '', end_time: '' }]
+
+  function setBlocks(newBlocks) {
+    onChange({ ...draft, scheduleBlocks: newBlocks })
   }
+  function addBlock() {
+    setBlocks([...blocks, { tempId: Date.now().toString(), days: [], start_time: '', end_time: '' }])
+  }
+  function removeBlock(idx) {
+    setBlocks(blocks.filter((_, i) => i !== idx))
+  }
+  function updateBlock(idx, update) {
+    setBlocks(blocks.map((b, i) => i === idx ? { ...b, ...update } : b))
+  }
+  function toggleBlockDay(idx, day) {
+    const days = blocks[idx].days || []
+    updateBlock(idx, { days: days.includes(day) ? days.filter(d => d !== day) : [...days, day] })
+  }
+
   return (
     <div className="border border-dashed border-primary/30 rounded-xl p-3 space-y-2.5 mb-3 bg-primary-light/20">
       <div>
@@ -1881,27 +2505,65 @@ function CaretakerForm({ draft, onChange, onSave, onCancel }) {
         <label className="label">Phone</label>
         <input className="input text-xs" value={draft.phone || ''} onChange={e => onChange({ ...draft, phone: e.target.value })} />
       </div>
+
+      {/* Schedule blocks */}
       <div>
-        <label className="label">Schedule Time</label>
-        <input className="input text-xs" placeholder="e.g. 9:00 AM – 1:00 PM" value={draft.schedule_time || ''} onChange={e => onChange({ ...draft, schedule_time: e.target.value })} />
-      </div>
-      <div>
-        <label className="label">Schedule Days</label>
-        <div className="flex gap-1 mt-1">
-          {['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(day => (
-            <button
-              key={day}
-              type="button"
-              onClick={() => toggleDay(day)}
-              className={`flex-1 text-center rounded-md py-1.5 text-[10px] font-body font-semibold transition-colors ${
-                (draft.schedule_days || []).includes(day) ? 'bg-primary text-white' : 'bg-gray-100 text-gray-400 hover:bg-gray-200'
-              }`}
-            >
-              {day[0]}
-            </button>
+        <label className="label">Schedule</label>
+        <div className="space-y-2 mt-1">
+          {blocks.map((block, idx) => (
+            <div key={block.tempId} className="bg-white rounded-lg p-2.5 border border-gray-100 space-y-2">
+              {/* Day toggles */}
+              <div className="flex gap-1">
+                {DAYS.map(day => (
+                  <button
+                    key={day}
+                    type="button"
+                    onClick={() => toggleBlockDay(idx, day)}
+                    className={`flex-1 text-center rounded-md py-1.5 text-[10px] font-body font-semibold transition-colors ${
+                      (block.days || []).includes(day) ? 'bg-primary text-white' : 'bg-gray-100 text-gray-400 hover:bg-gray-200'
+                    }`}
+                  >
+                    {day[0]}
+                  </button>
+                ))}
+              </div>
+              {/* Time range */}
+              <div className="flex items-center gap-1.5">
+                <input
+                  type="time"
+                  className="input text-xs flex-1"
+                  value={block.start_time || ''}
+                  onChange={e => updateBlock(idx, { start_time: e.target.value })}
+                />
+                <span className="text-gray-400 text-xs flex-shrink-0">–</span>
+                <input
+                  type="time"
+                  className="input text-xs flex-1"
+                  value={block.end_time || ''}
+                  onChange={e => updateBlock(idx, { end_time: e.target.value })}
+                />
+                {blocks.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => removeBlock(idx)}
+                    className="p-1 text-gray-300 hover:text-red-400 transition-colors flex-shrink-0"
+                  >
+                    <X size={12} />
+                  </button>
+                )}
+              </div>
+            </div>
           ))}
+          <button
+            type="button"
+            onClick={addBlock}
+            className="flex items-center gap-1 text-xs font-body text-primary hover:underline"
+          >
+            <Plus size={11} /> Add another block
+          </button>
         </div>
       </div>
+
       <div className="flex gap-2 pt-1">
         <button onClick={onSave} className="btn-primary flex-1 py-1.5 text-xs">Save</button>
         <button onClick={onCancel} className="btn-ghost flex-1 py-1.5 text-xs">Cancel</button>
@@ -2030,8 +2692,423 @@ function TBtn({ children, onMouseDown, active, title }) {
   )
 }
 
+// ── CalendarWidget ────────────────────────────────────────────────────────────
+function CalendarWidget({ viewDate, onPrev, onNext, appointments, selectedDate, onSelectDate, onView, onToday }) {
+  const monthStart = startOfMonth(viewDate)
+  const monthEnd = endOfMonth(viewDate)
+  const days = eachDayOfInterval({ start: monthStart, end: monthEnd })
+  const leadingBlanks = getDay(monthStart) // 0=Sun
+
+  const apptsByDate = {}
+  appointments.forEach(appt => {
+    const d = (appt.appointment_date || '').slice(0, 10)
+    if (!d) return
+    if (!apptsByDate[d]) apptsByDate[d] = []
+    apptsByDate[d].push(appt)
+  })
+
+  const todayStr = format(new Date(), 'yyyy-MM-dd')
+
+  return (
+    <div>
+      {/* Month nav */}
+      <div className="flex items-center justify-between mb-3">
+        <button
+          onClick={onPrev}
+          className="p-1 text-gray-400 hover:text-gray-600 transition-colors rounded-lg hover:bg-gray-100"
+        >
+          <ChevronLeft size={15} />
+        </button>
+        <span className="font-body text-sm font-semibold text-gray-700">
+          {format(viewDate, 'MMMM yyyy')}
+        </span>
+        <button
+          onClick={onNext}
+          className="p-1 text-gray-400 hover:text-gray-600 transition-colors rounded-lg hover:bg-gray-100"
+        >
+          <ChevronRight size={15} />
+        </button>
+      </div>
+
+      {/* Today button */}
+      <div className="flex justify-center my-2">
+        <button
+          onClick={onToday}
+          className="font-body text-[10px] font-medium px-3 py-1 rounded-full bg-primary-light text-primary border border-primary/20 hover:bg-primary/15 hover:border-primary/40 transition-all"
+        >
+          Today
+        </button>
+      </div>
+
+      {/* Day headers */}
+      <div className="grid grid-cols-7 mb-1">
+        {['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].map(d => (
+          <div key={d} className="text-center font-body text-[10px] text-gray-400 font-medium py-1">
+            {d}
+          </div>
+        ))}
+      </div>
+
+      {/* Calendar grid */}
+      <div className="grid grid-cols-7">
+        {Array.from({ length: leadingBlanks }).map((_, i) => (
+          <div key={`b${i}`} />
+        ))}
+        {days.map(day => {
+          const dateStr = format(day, 'yyyy-MM-dd')
+          const isToday = dateStr === todayStr
+          const hasAppts = !!apptsByDate[dateStr]
+          const isSelected = dateStr === selectedDate
+          return (
+            <button
+              key={dateStr}
+              onClick={() => hasAppts ? onSelectDate(dateStr) : undefined}
+              className={`flex flex-col items-center py-0.5 rounded-lg transition-all ${
+                hasAppts ? 'cursor-pointer hover:bg-primary-light' : 'cursor-default'
+              } ${isSelected && !isToday ? 'bg-primary-light' : ''}`}
+            >
+              <span className={`w-7 h-7 flex items-center justify-center rounded-full font-body text-xs font-medium transition-all ${
+                isToday ? 'bg-primary text-white' : 'text-gray-700'
+              }`}>
+                {format(day, 'd')}
+              </span>
+              <span className={`w-1.5 h-1.5 rounded-full mt-0.5 mb-0.5 ${
+                hasAppts ? (isToday ? 'bg-white/70' : 'bg-primary') : 'invisible'
+              }`} />
+            </button>
+          )
+        })}
+      </div>
+
+      {/* Selected day popover */}
+      {selectedDate && apptsByDate[selectedDate] && (
+        <div className="mt-3 border border-primary/20 rounded-xl bg-primary-light/30 p-3 space-y-2">
+          <p className="font-body text-xs font-semibold text-primary">
+            {format(parseISO(selectedDate), 'MMMM d, yyyy')}
+          </p>
+          {apptsByDate[selectedDate].map(appt => {
+            const typeColor = appt.appointment_type
+              ? (APPT_TYPE_COLORS[appt.appointment_type] || APPT_TYPE_COLORS['Other'])
+              : null
+            return (
+              <div
+                key={appt.id}
+                onClick={() => onView(appt)}
+                className="bg-white rounded-lg px-3 py-2.5 border border-gray-100 cursor-pointer hover:bg-gray-50 transition-colors"
+              >
+                {typeColor && (
+                  <span className={`tag border text-[10px] mb-1 inline-flex ${typeColor}`}>
+                    {appt.appointment_type}
+                  </span>
+                )}
+                <p className="font-body text-sm font-semibold text-gray-700">{appt.title}</p>
+                <p className="font-body text-xs text-primary font-medium mt-0.5">
+                  {format(parseISO(appt.appointment_date), 'h:mm a')}
+                </p>
+                {appt.provider && <p className="font-body text-xs text-gray-500">with {appt.provider}</p>}
+                {appt.location && <p className="font-body text-xs text-gray-400">{appt.location}</p>}
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── AppointmentModal ───────────────────────────────────────────────────────────
+const APPT_TYPES = ['Doctor Appointment', 'Patient Meeting', 'Family Meeting', 'SBHA General Event', 'Other']
+
+function AppointmentModal({ modal, onClose, onSave, onDelete, saving }) {
+  const isNew = modal.mode === 'new'
+  const initialAppt = modal.mode === 'view' ? modal.appt : (modal.draft || {})
+  const [mode, setMode] = useState(modal.mode === 'view' ? 'view' : 'edit')
+  const [draft, setDraft] = useState({ ...initialAppt })
+
+  const isOtherType = !!draft.appointment_type && !APPT_TYPES.slice(0, -1).includes(draft.appointment_type) && draft.appointment_type !== ''
+  const [typeIsOther, setTypeIsOther] = useState(isOtherType)
+  const [otherTypeText, setOtherTypeText] = useState(isOtherType ? draft.appointment_type : '')
+
+  const dateInputVal = draft.appointment_date ? draft.appointment_date.slice(0, 16) : ''
+
+  function enterEditMode() {
+    setTypeIsOther(isOtherType)
+    setOtherTypeText(isOtherType ? draft.appointment_type : '')
+    setMode('edit')
+  }
+
+  function handleSave() {
+    const finalType = typeIsOther ? otherTypeText.trim() : draft.appointment_type
+    onSave({ ...draft, appointment_type: finalType || null })
+  }
+
+  const typeColor = draft.appointment_type
+    ? (APPT_TYPE_COLORS[draft.appointment_type] || APPT_TYPE_COLORS['Other'])
+    : null
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+      <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" />
+      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md flex flex-col overflow-hidden">
+
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 flex-shrink-0">
+          <div className="flex items-center gap-2.5 min-w-0">
+            {mode === 'view' && typeColor && (
+              <span className={`tag border text-[10px] flex-shrink-0 ${typeColor}`}>
+                {draft.appointment_type}
+              </span>
+            )}
+            <h2 className="font-heading text-xl font-semibold text-gray-800 truncate">
+              {isNew ? 'Add Appointment' : (mode === 'view' ? (draft.title || 'Appointment') : 'Edit Appointment')}
+            </h2>
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {mode === 'view' && (
+              <>
+                <button
+                  onClick={enterEditMode}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-body text-xs font-medium text-primary bg-primary-light hover:bg-primary/20 transition-colors"
+                >
+                  <Edit3 size={12} /> Edit
+                </button>
+                <button
+                  onClick={() => onDelete(draft.id)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-body text-xs font-medium text-red-500 bg-red-50 hover:bg-red-100 transition-colors"
+                >
+                  <Trash2 size={12} /> Delete
+                </button>
+              </>
+            )}
+            <button onClick={onClose} className="p-1.5 text-gray-400 hover:text-gray-600 transition-colors"><X size={18} /></button>
+          </div>
+        </div>
+
+        {/* Content */}
+        {mode === 'view' ? (
+          <div className="px-6 py-5 space-y-4 overflow-y-auto">
+            <div>
+              <p className="label">Date &amp; Time</p>
+              <p className="font-body text-sm text-gray-700">
+                {draft.appointment_date
+                  ? format(parseISO(draft.appointment_date), 'MMMM d, yyyy · h:mm a')
+                  : '—'}
+              </p>
+            </div>
+            {draft.provider && (
+              <div>
+                <p className="label">Provider</p>
+                <p className="font-body text-sm text-gray-700">{draft.provider}</p>
+              </div>
+            )}
+            {draft.location && (
+              <div>
+                <p className="label">Location</p>
+                <p className="font-body text-sm text-gray-700">{draft.location}</p>
+              </div>
+            )}
+            {draft.notes && (
+              <div>
+                <p className="label">Notes</p>
+                <p className="font-body text-sm text-gray-700 leading-relaxed">{draft.notes}</p>
+              </div>
+            )}
+            {!draft.provider && !draft.location && !draft.notes && (
+              <p className="font-body text-sm text-gray-400 italic">No additional details.</p>
+            )}
+          </div>
+        ) : (
+          <div className="px-6 py-5 space-y-3 overflow-y-auto max-h-[70vh]">
+            <Field label="Title *">
+              <input
+                className="input"
+                placeholder="Appointment title"
+                value={draft.title || ''}
+                onChange={e => setDraft(d => ({ ...d, title: e.target.value }))}
+                autoFocus
+              />
+            </Field>
+            <Field label="Type">
+              <select
+                className="input"
+                value={typeIsOther ? 'Other' : (draft.appointment_type || '')}
+                onChange={e => {
+                  if (e.target.value === 'Other') {
+                    setTypeIsOther(true)
+                    setDraft(d => ({ ...d, appointment_type: '' }))
+                  } else {
+                    setTypeIsOther(false)
+                    setOtherTypeText('')
+                    setDraft(d => ({ ...d, appointment_type: e.target.value }))
+                  }
+                }}
+              >
+                <option value="">Select type…</option>
+                {APPT_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+              {typeIsOther && (
+                <input
+                  className="input mt-1.5"
+                  placeholder="Describe the appointment type…"
+                  value={otherTypeText}
+                  onChange={e => setOtherTypeText(e.target.value)}
+                />
+              )}
+            </Field>
+            <Field label="Date &amp; Time">
+              <input
+                type="datetime-local"
+                className="input"
+                value={dateInputVal}
+                onChange={e => setDraft(d => ({ ...d, appointment_date: e.target.value }))}
+              />
+            </Field>
+            <Field label="Provider">
+              <input
+                className="input"
+                placeholder="Provider name"
+                value={draft.provider || ''}
+                onChange={e => setDraft(d => ({ ...d, provider: e.target.value }))}
+              />
+            </Field>
+            <Field label="Location">
+              <input
+                className="input"
+                placeholder="Location"
+                value={draft.location || ''}
+                onChange={e => setDraft(d => ({ ...d, location: e.target.value }))}
+              />
+            </Field>
+            <Field label="Notes">
+              <textarea
+                className="input resize-none"
+                rows={3}
+                placeholder="Additional notes…"
+                value={draft.notes || ''}
+                onChange={e => setDraft(d => ({ ...d, notes: e.target.value }))}
+              />
+            </Field>
+          </div>
+        )}
+
+        {/* Footer — edit/new only */}
+        {mode === 'edit' && (
+          <div className="flex gap-2 px-6 py-4 border-t border-gray-100 flex-shrink-0">
+            <button
+              onClick={() => isNew ? onClose() : setMode('view')}
+              className="btn-ghost flex-1 py-2 text-sm"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleSave}
+              disabled={saving || !draft.title?.trim() || !draft.appointment_date}
+              className="btn-primary flex-1 py-2 text-sm disabled:opacity-50"
+            >
+              {saving ? 'Saving…' : (isNew ? 'Add Appointment' : 'Save Changes')}
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ── NoteModal ─────────────────────────────────────────────────────────────────
-function NoteModal({ modal, onClose, onSave, onUpdate, onDelete, saving }) {
+const INSURANCE_TYPES_LIST = ['Medicare', 'Medicaid', 'Medicare + Medicaid', 'Private Insurance', 'Uninsured']
+
+function InsuranceModal({ modal, onClose, onSave, saving }) {
+  const isOtherInit = !!modal.draft.insurance_type && !INSURANCE_TYPES_LIST.includes(modal.draft.insurance_type)
+  const [draft, setDraft] = useState({ ...modal.draft })
+  const [otherMode, setOtherMode] = useState(isOtherInit)
+  const [otherText, setOtherText] = useState(isOtherInit ? modal.draft.insurance_type : '')
+
+  function handleSave() {
+    const finalType = otherMode ? otherText.trim() : draft.insurance_type
+    onSave({ ...draft, insurance_type: finalType })
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+      <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" />
+      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md flex flex-col overflow-hidden">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+          <h2 className="font-heading text-xl font-semibold text-gray-800">
+            {modal.mode === 'new' ? 'Add Insurance' : 'Edit Insurance'}
+          </h2>
+          <button onClick={onClose} className="p-1.5 text-gray-400 hover:text-gray-600 transition-colors"><X size={18} /></button>
+        </div>
+        <div className="px-6 py-5 space-y-4">
+          <div>
+            <label className="label">Insurance Type</label>
+            <select
+              className="input"
+              value={otherMode ? '__other__' : (draft.insurance_type || '')}
+              onChange={e => {
+                if (e.target.value === '__other__') {
+                  setOtherMode(true)
+                  setDraft(d => ({ ...d, insurance_type: '' }))
+                } else {
+                  setOtherMode(false)
+                  setOtherText('')
+                  setDraft(d => ({ ...d, insurance_type: e.target.value }))
+                }
+              }}
+            >
+              <option value="">Select type…</option>
+              {INSURANCE_TYPES_LIST.map(t => <option key={t} value={t}>{t}</option>)}
+              <option value="__other__">Other</option>
+            </select>
+            {otherMode && (
+              <input
+                className="input mt-2"
+                placeholder="Specify insurance type…"
+                value={otherText}
+                onChange={e => setOtherText(e.target.value)}
+              />
+            )}
+          </div>
+          <div>
+            <label className="label">Insurance Provider / Plan Name</label>
+            <input
+              className="input"
+              placeholder="e.g. Blue Cross Blue Shield, Aetna"
+              value={draft.insurance_provider || ''}
+              onChange={e => setDraft(d => ({ ...d, insurance_provider: e.target.value }))}
+            />
+          </div>
+          <div>
+            <label className="label">Billing Concerns</label>
+            <textarea
+              className="input resize-none"
+              rows={3}
+              placeholder="Describe any billing concerns or outstanding balances…"
+              value={draft.billing_concerns || ''}
+              onChange={e => setDraft(d => ({ ...d, billing_concerns: e.target.value }))}
+            />
+          </div>
+          <div className="flex items-center justify-between py-1">
+            <span className="font-body text-sm text-gray-600">Set as primary insurance</span>
+            <button
+              onClick={() => setDraft(d => ({ ...d, is_primary: !d.is_primary }))}
+              className={draft.is_primary ? 'text-primary' : 'text-gray-300'}
+            >
+              {draft.is_primary ? <ToggleRight size={26} /> : <ToggleLeft size={26} />}
+            </button>
+          </div>
+        </div>
+        <div className="flex gap-2 px-6 py-4 border-t border-gray-100">
+          <button onClick={onClose} className="btn-ghost flex-1 py-2 text-sm">Cancel</button>
+          <button onClick={handleSave} disabled={saving} className="btn-primary flex-1 py-2 text-sm disabled:opacity-50">
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function NoteModal({ modal, patientName, onClose, onSave, onUpdate, onDelete, saving }) {
   const isNew = modal.mode === 'new'
   const note = modal.note || null
   const [mode, setMode] = useState(isNew ? 'edit' : 'view')
@@ -2077,6 +3154,163 @@ function NoteModal({ modal, onClose, onSave, onUpdate, onDelete, saving }) {
     onClose()
   }
 
+  function exportNotePDF() {
+    const displayType = viewTypeKey === 'Other' && note?.note_type && note.note_type !== 'Other'
+      ? note.note_type : viewTypeKey
+    const dateStr = note?.note_date
+      ? format(parseISO(note.note_date.slice(0, 10)), 'MMMM d, yyyy')
+      : ''
+
+    const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>${note.title || 'Note'} — ${patientName}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600&family=Montserrat:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Montserrat', Arial, sans-serif; color: #1f2937; padding: 48px; font-size: 13px; line-height: 1.7; }
+    .patient-name { font-family: 'Montserrat', Arial, sans-serif; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; color: #9ca3af; margin-bottom: 16px; }
+    .note-title { font-family: 'Cormorant Garamond', Georgia, serif; font-size: 30px; font-weight: 600; color: #111827; margin-bottom: 10px; line-height: 1.2; }
+    .meta-row { display: flex; align-items: center; gap: 12px; margin-bottom: 28px; }
+    .badge { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 10px; font-weight: 600; letter-spacing: 0.05em; border: 1px solid; }
+    .date { font-size: 11px; color: #6b7280; }
+    .divider { border: none; border-top: 1px solid #e5e7eb; margin-bottom: 28px; }
+    .note-body { font-size: 13px; color: #374151; line-height: 1.8; }
+    .note-body ul  { list-style-type: disc;    padding-left: 1.5rem; margin: 0.4rem 0; }
+    .note-body ol  { list-style-type: decimal; padding-left: 1.5rem; margin: 0.4rem 0; }
+    .note-body li  { display: list-item; margin: 0.15rem 0; }
+    .note-body strong { font-weight: 700; }
+    .note-body em     { font-style: italic; }
+    .note-body u      { text-decoration: underline; }
+    .note-body p   { margin-bottom: 0.75rem; }
+    .note-body p:last-child { margin-bottom: 0; }
+    .note-body p:empty::before { content: '\\00a0'; }
+    .footer { margin-top: 40px; padding-top: 12px; border-top: 1px solid #e5e7eb; font-size: 10px; color: #9ca3af; }
+    @page { margin: 1.5cm; }
+    @media print {
+      body { padding: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    }
+  </style>
+</head>
+<body>
+  <div class="patient-name">${patientName}</div>
+  <div class="note-title">${note.title || 'Untitled Note'}</div>
+  <div class="meta-row">
+    ${displayType ? `<span class="badge" style="background:${badgeBg(displayType)};color:${badgeFg(displayType)};border-color:${badgeBorder(displayType)};">${displayType}</span>` : ''}
+    ${dateStr ? `<span class="date">${dateStr}</span>` : ''}
+  </div>
+  <div class="divider"></div>
+  <div class="note-body">${note.body || ''}</div>
+  <div class="footer">Exported from SBHA Care Manager · ${format(new Date(), 'MMMM d, yyyy')}</div>
+</body>
+</html>`
+
+    const printWindow = window.open('', '_blank')
+    if (!printWindow) return
+    printWindow.document.write(html)
+    printWindow.document.close()
+    printWindow.focus()
+    setTimeout(() => { printWindow.print() }, 600)
+  }
+
+  async function exportNoteDocx() {
+    console.log('[exportNoteDocx] called', { note, patientName })
+    try {
+    const displayType = viewTypeKey === 'Other' && note?.note_type && note.note_type !== 'Other'
+      ? note.note_type : viewTypeKey
+    const dateStr = note?.note_date
+      ? format(parseISO(note.note_date.slice(0, 10)), 'MMMM d, yyyy')
+      : ''
+
+    // Parse inline nodes, threading bold/italic/underline context down
+    function parseInline(node, opts = {}) {
+      if (node.nodeType === 3) {
+        const text = node.textContent
+        return text ? [new TextRun({ text, ...opts })] : []
+      }
+      const tag = node.tagName?.toLowerCase()
+      const o = { ...opts }
+      if (tag === 'strong' || tag === 'b') o.bold = true
+      if (tag === 'em'    || tag === 'i') o.italics = true
+      if (tag === 'u')                    o.underline = {}
+      return Array.from(node.childNodes).flatMap(c => parseInline(c, o))
+    }
+
+    const bodyDoc = new DOMParser().parseFromString(`<div>${note.body || ''}</div>`, 'text/html')
+    const root = bodyDoc.body.firstChild
+    const OL_REF = 'ol-numbering'
+    const bodyParagraphs = []
+
+    for (const node of Array.from(root.childNodes)) {
+      const tag = node.tagName?.toLowerCase()
+      if (tag === 'p') {
+        const runs = Array.from(node.childNodes).flatMap(c => parseInline(c))
+        bodyParagraphs.push(new Paragraph({
+          children: runs.length ? runs : [new TextRun('')],
+          spacing: { after: 160 },
+        }))
+      } else if (tag === 'ul') {
+        for (const li of Array.from(node.children)) {
+          bodyParagraphs.push(new Paragraph({
+            children: Array.from(li.childNodes).flatMap(c => parseInline(c)),
+            bullet: { level: 0 },
+          }))
+        }
+      } else if (tag === 'ol') {
+        for (const li of Array.from(node.children)) {
+          bodyParagraphs.push(new Paragraph({
+            children: Array.from(li.childNodes).flatMap(c => parseInline(c)),
+            numbering: { reference: OL_REF, level: 0 },
+          }))
+        }
+      }
+    }
+
+    const metaRuns = [
+      displayType && new TextRun({ text: displayType, bold: true, size: 18, color: '6B7280' }),
+      displayType && dateStr && new TextRun({ text: '   ·   ', size: 18, color: 'D1D5DB' }),
+      dateStr && new TextRun({ text: dateStr, size: 18, color: '6B7280' }),
+    ].filter(Boolean)
+
+    const doc = new Document({
+      numbering: {
+        config: [{
+          reference: OL_REF,
+          levels: [{
+            level: 0,
+            format: LevelFormat.DECIMAL,
+            text: '%1.',
+            alignment: AlignmentType.START,
+            style: { paragraph: { indent: { left: 720, hanging: 360 } } },
+          }],
+        }],
+      },
+      sections: [{
+        children: [
+          new Paragraph({
+            children: [new TextRun({ text: patientName.toUpperCase(), color: '9CA3AF', size: 16, bold: true })],
+            spacing: { after: 100 },
+          }),
+          new Paragraph({
+            children: [new TextRun({ text: note.title || 'Untitled Note', bold: true, size: 40 })],
+            spacing: { after: 120 },
+          }),
+          ...(metaRuns.length ? [new Paragraph({ children: metaRuns, spacing: { after: 400 } })] : []),
+          ...bodyParagraphs,
+        ],
+      }],
+    })
+
+    const blob = await Packer.toBlob(doc)
+    saveAs(blob, `${patientName} - ${note.title || 'Note'}.docx`)
+    console.log('[exportNoteDocx] done')
+    } catch (err) {
+      console.error('[exportNoteDocx] error:', err)
+    }
+  }
+
   const canSave = noteTitle.trim().length > 0
   const viewTypeKey = note
     ? (NOTE_TYPES.includes(note.note_type) ? note.note_type : 'Other')
@@ -2109,6 +3343,20 @@ function NoteModal({ modal, onClose, onSave, onUpdate, onDelete, saving }) {
           <div className="flex items-center gap-2 flex-shrink-0">
             {!isNew && mode === 'view' && (
               <>
+                <button
+                  onClick={exportNotePDF}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-body text-xs font-medium text-gray-500 bg-gray-50 hover:bg-gray-100 border border-gray-200 transition-colors"
+                  title="Export as PDF"
+                >
+                  <Printer size={12} /> Export PDF
+                </button>
+                <button
+                  onClick={exportNoteDocx}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-body text-xs font-medium text-gray-500 bg-gray-50 hover:bg-gray-100 border border-gray-200 transition-colors"
+                  title="Export as Word Doc"
+                >
+                  <Download size={12} /> Export Word
+                </button>
                 <button
                   onClick={enterEditMode}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-body text-xs font-medium text-primary bg-primary-light hover:bg-primary/20 transition-colors"
@@ -2225,6 +3473,59 @@ function NoteModal({ modal, onClose, onSave, onUpdate, onDelete, saving }) {
             </button>
           </div>
         )}
+      </div>
+    </div>
+  )
+}
+
+function DocPreviewModal({ doc, url, onClose, onDownload }) {
+  const category = getDocFileCategory(doc)
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={onClose}>
+      <div
+        className="bg-white rounded-2xl shadow-2xl flex flex-col w-full max-w-4xl"
+        style={{ height: '90vh' }}
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 flex-shrink-0">
+          <div className="flex items-center gap-2 min-w-0">
+            <FileText size={16} className="text-primary flex-shrink-0" />
+            <p className="font-body text-sm font-medium text-gray-800 truncate">{doc.name}</p>
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <button
+              onClick={onDownload}
+              className="flex items-center gap-1.5 font-body text-xs font-medium text-primary hover:text-primary/80 border border-primary/30 hover:border-primary/60 rounded-lg px-3 py-1.5 transition-colors"
+            >
+              <Download size={13} />
+              Download
+            </button>
+            <button onClick={onClose} className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors">
+              <X size={18} />
+            </button>
+          </div>
+        </div>
+
+        {/* Content */}
+        <div className="flex-1 overflow-hidden rounded-b-2xl">
+          {category === 'pdf' && (
+            <iframe
+              src={url}
+              title={doc.name}
+              className="w-full h-full border-0"
+            />
+          )}
+          {category === 'image' && (
+            <div className="w-full h-full flex items-center justify-center bg-gray-50 p-4 overflow-auto">
+              <img
+                src={url}
+                alt={doc.name}
+                className="max-w-full max-h-full object-contain rounded-xl"
+              />
+            </div>
+          )}
+        </div>
       </div>
     </div>
   )
