@@ -1,12 +1,41 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
-import { format, isToday, parseISO, isAfter, startOfDay, addDays } from 'date-fns'
+import { format, isToday, parseISO, isAfter, startOfDay, addDays, isSameDay } from 'date-fns'
 import {
   Pin, Calendar, FileText, Plus, Clock,
-  ChevronRight, Activity, ChevronDown, ChevronUp, Search, User,
+  ChevronRight, ChevronLeft, Activity, ChevronDown, ChevronUp,
+  Search, User, X, Edit3, Trash2, ExternalLink,
 } from 'lucide-react'
 
+const APPT_TYPES = ['Doctor Appointment', 'Patient Meeting', 'Family Meeting', 'SBHA General Event', 'Other']
+
+// Parse appointment datetime as local time — strips tz offset so stored times display as entered
+function parseApptDateLocal(dateStr) {
+  if (!dateStr) return new Date(0)
+  return parseISO(dateStr.slice(0, 16))
+}
+
+// Returns the most recent PAST activity timestamp.
+// Uses note created_at (not note_date — that's user-specified and often backdated).
+// Excludes future appointments so they don't pollute the "last activity" date.
+function getMostRecentActivity(patient) {
+  const now = Date.now()
+  const candidates = [
+    // When the note was actually entered in the system (not the user-chosen note_date)
+    ...(patient.notes || []).map(n => n.created_at).filter(Boolean),
+    // Past appointments only
+    ...(patient.appointments || [])
+      .map(a => a.appointment_date)
+      .filter(d => d && new Date(d.slice(0, 16)).getTime() < now),
+    patient.updated_at,
+  ].filter(Boolean)
+  if (!candidates.length) return null
+  // Compare as timestamps to avoid ISO string edge cases
+  return candidates.reduce((latest, d) =>
+    new Date(d).getTime() > new Date(latest).getTime() ? d : latest
+  )
+}
 const APPT_TYPE_COLORS = {
   'Doctor Appointment': 'bg-blue-50 text-blue-600 border-blue-100',
   'Patient Meeting':    'bg-purple-50 text-purple-600 border-purple-100',
@@ -15,26 +44,30 @@ const APPT_TYPE_COLORS = {
   'Other':              'bg-pink-50 text-pink-600 border-pink-100',
 }
 
+const APPT_SELECT = 'id, title, appointment_date, appointment_type, patient_id, provider, location, notes, patients(first_name, last_name)'
+
 export default function Dashboard() {
   const navigate = useNavigate()
   const [patients, setPatients] = useState([])
   const [inactivePatients, setInactivePatients] = useState([])
   const [pinnedDocs, setPinnedDocs] = useState([])
-  const [todayAppts, setTodayAppts] = useState([])
+  const [viewedAppts, setViewedAppts] = useState([])
   const [loading, setLoading] = useState(true)
   const [showInactive, setShowInactive] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [editingDesc, setEditingDesc] = useState(null) // { id, value }
+  const [viewDate, setViewDate] = useState(startOfDay(new Date()))
+  const [showAddModal, setShowAddModal] = useState(false)
+  const [savingEvent, setSavingEvent] = useState(false)
+  const [apptModal, setApptModal] = useState(null) // null | appt object
+  const [savingApptUpdate, setSavingApptUpdate] = useState(false)
 
   useEffect(() => { loadDashboardData() }, [])
+  useEffect(() => { loadApptsForDate(viewDate) }, [viewDate])
 
   async function loadDashboardData() {
     setLoading(true)
-    // Use a 3-day window and filter client-side with isToday() to avoid UTC/local timezone drift
-    const windowStart = format(addDays(new Date(), -1), 'yyyy-MM-dd')
-    const windowEnd   = format(addDays(new Date(),  2), 'yyyy-MM-dd')
-
-    const [patientsRes, docsRes, apptsRes] = await Promise.all([
+    const [patientsRes, docsRes] = await Promise.all([
       supabase
         .from('patients')
         .select(`*, notes(note_date, created_at), appointments(id, title, appointment_date, completed)`)
@@ -44,43 +77,110 @@ export default function Dashboard() {
         .select('*')
         .eq('is_pinned', true)
         .order('created_at', { ascending: false }),
-      supabase
-        .from('appointments')
-        .select('id, title, appointment_date, appointment_type, patient_id, patients(first_name, last_name)')
-        .gte('appointment_date', windowStart)
-        .lte('appointment_date', windowEnd)
-        .order('appointment_date'),
     ])
 
     if (patientsRes.error) console.error('[Dashboard] patients query error:', patientsRes.error)
     const allPatients = patientsRes.data || []
-    setPatients(allPatients.filter(p => p.status === 'active'))
+    const active = allPatients.filter(p => p.status === 'active')
+
+    // Debug: log activity dates so we can verify sorting inputs
+    console.log('[Dashboard] patient activity dates:')
+    active.forEach(p => {
+      const d = getMostRecentActivity(p)
+      console.log(`  ${p.first_name} ${p.last_name}: ${d ?? 'none'} | notes: ${(p.notes || []).length} | appts: ${(p.appointments || []).length}`)
+    })
+
+    active.sort((a, b) => {
+      const aMs = getMostRecentActivity(a) ? new Date(getMostRecentActivity(a)).getTime() : 0
+      const bMs = getMostRecentActivity(b) ? new Date(getMostRecentActivity(b)).getTime() : 0
+      return bMs - aMs // descending: most recent first
+    })
+    setPatients(active)
     setInactivePatients(allPatients.filter(p => p.status !== 'active'))
     setPinnedDocs(docsRes.data || [])
-    // Filter server results client-side using local date — fixes UTC offset issues
-    setTodayAppts((apptsRes.data || []).filter(a => isToday(parseISO(a.appointment_date))))
     setLoading(false)
   }
 
-  function getLastActivityDate(patient) {
-    const dates = (patient.notes || [])
-      .map(n => n.note_date || n.created_at)
-      .filter(Boolean)
-    if (!dates.length) return patient.updated_at || null
-    dates.sort((a, b) => new Date(b) - new Date(a))
-    return dates[0]
+  async function loadApptsForDate(date) {
+    const windowStart = format(addDays(date, -1), 'yyyy-MM-dd')
+    const windowEnd   = format(addDays(date,  2), 'yyyy-MM-dd')
+    const { data } = await supabase
+      .from('appointments')
+      .select(APPT_SELECT)
+      .gte('appointment_date', windowStart)
+      .lte('appointment_date', windowEnd)
+      .order('appointment_date')
+    setViewedAppts((data || []).filter(a => isSameDay(parseApptDateLocal(a.appointment_date), date)))
+  }
+
+  async function saveEvent(draft) {
+    setSavingEvent(true)
+    const payload = {
+      title: draft.title,
+      appointment_type: draft.appointment_type || null,
+      appointment_date: draft.appointment_date,
+      patient_id: draft.patient_id || null,
+      provider: draft.provider || null,
+      location: draft.location || null,
+      notes: draft.notes || null,
+    }
+    const { data } = await supabase
+      .from('appointments')
+      .insert(payload)
+      .select(APPT_SELECT)
+      .single()
+    if (data && isSameDay(parseApptDateLocal(data.appointment_date), viewDate)) {
+      setViewedAppts(prev =>
+        [...prev, data].sort((a, b) => new Date(a.appointment_date) - new Date(b.appointment_date))
+      )
+    }
+    setSavingEvent(false)
+    setShowAddModal(false)
+  }
+
+  async function updateAppt(apptId, fields) {
+    setSavingApptUpdate(true)
+    const { data } = await supabase
+      .from('appointments')
+      .update(fields)
+      .eq('id', apptId)
+      .select(APPT_SELECT)
+      .single()
+    if (data) {
+      if (isSameDay(parseApptDateLocal(data.appointment_date), viewDate)) {
+        setViewedAppts(prev =>
+          prev.map(a => a.id === apptId ? data : a)
+            .sort((a, b) => new Date(a.appointment_date) - new Date(b.appointment_date))
+        )
+      } else {
+        // Moved to a different day — remove from current view
+        setViewedAppts(prev => prev.filter(a => a.id !== apptId))
+      }
+      setApptModal(data)
+    }
+    setSavingApptUpdate(false)
+  }
+
+  async function deleteAppt(apptId) {
+    await supabase.from('appointments').delete().eq('id', apptId)
+    setViewedAppts(prev => prev.filter(a => a.id !== apptId))
+    setApptModal(null)
   }
 
   function getNextAppointment(patient) {
     const now = startOfDay(new Date())
     const upcoming = (patient.appointments || [])
-      .filter(a => !a.completed && isAfter(parseISO(a.appointment_date), now))
+      .filter(a => !a.completed && isAfter(parseApptDateLocal(a.appointment_date), now))
       .sort((a, b) => new Date(a.appointment_date) - new Date(b.appointment_date))
     return upcoming[0] || null
   }
 
   async function saveQuickDescription(patientId, value) {
-    await supabase.from('patients').update({ quick_description: value }).eq('id', patientId)
+    const { error } = await supabase
+      .from('patients')
+      .update({ quick_description: value })
+      .eq('id', patientId)
+    if (error) console.error('[Dashboard] saveQuickDescription error:', error)
     setPatients(prev => prev.map(p => p.id === patientId ? { ...p, quick_description: value } : p))
     setEditingDesc(null)
   }
@@ -89,6 +189,11 @@ export default function Dashboard() {
     ? patients.filter(p =>
         `${p.first_name} ${p.last_name}`.toLowerCase().includes(searchQuery.trim().toLowerCase()))
     : patients
+
+  const isViewingToday = isToday(viewDate)
+  const scheduleTitle = isViewingToday
+    ? "Today's Schedule"
+    : format(viewDate, 'EEEE, MMMM d')
 
   if (loading) {
     return (
@@ -166,48 +271,85 @@ export default function Dashboard() {
         )}
       </section>
 
-      {/* Today's Schedule */}
+      {/* Schedule */}
       <section className="mb-8">
-        <div className="flex items-center gap-2 mb-3">
+        <div className="flex items-center gap-1.5 mb-3 flex-wrap">
           <Calendar size={15} className="text-primary" />
+
+          <button
+            onClick={() => setViewDate(d => startOfDay(addDays(d, -1)))}
+            className="p-0.5 text-gray-400 hover:text-primary transition-colors rounded"
+            title="Previous day"
+          >
+            <ChevronLeft size={15} />
+          </button>
+
           <h2 className="font-body text-sm font-semibold text-gray-500 uppercase tracking-wider">
-            Today's Schedule
+            {scheduleTitle}
           </h2>
+
+          <button
+            onClick={() => setViewDate(d => startOfDay(addDays(d, 1)))}
+            className="p-0.5 text-gray-400 hover:text-primary transition-colors rounded"
+            title="Next day"
+          >
+            <ChevronRight size={15} />
+          </button>
+
+          {!isViewingToday && (
+            <button
+              onClick={() => setViewDate(startOfDay(new Date()))}
+              className="font-body text-xs text-primary hover:text-primary/70 transition-colors px-1.5 py-0.5 rounded bg-primary-light"
+            >
+              Today
+            </button>
+          )}
+
           <span className="tag bg-primary-light text-primary ml-1">
-            {todayAppts.length} appointment{todayAppts.length !== 1 ? 's' : ''}
+            {viewedAppts.length} appointment{viewedAppts.length !== 1 ? 's' : ''}
           </span>
-          <button className="ml-auto flex items-center gap-1 font-body text-xs font-medium text-primary hover:text-primary/70 transition-colors">
+
+          <button
+            onClick={() => setShowAddModal(true)}
+            className="ml-auto flex items-center gap-1 font-body text-xs font-medium text-primary hover:text-primary/70 transition-colors"
+          >
             <Plus size={13} /> Add
           </button>
         </div>
 
-        {todayAppts.length === 0 ? (
+        {viewedAppts.length === 0 ? (
           <div className="card text-center py-6 border-gray-50">
             <Calendar size={24} className="text-gray-200 mx-auto mb-2" />
-            <p className="font-body text-sm text-gray-400">No appointments scheduled for today</p>
+            <p className="font-body text-sm text-gray-400">
+              No appointments scheduled for {isViewingToday ? 'today' : format(viewDate, 'MMMM d')}
+            </p>
           </div>
         ) : (
           <div className="space-y-2">
-            {todayAppts.map((appt) => (
+            {viewedAppts.map((appt) => (
               <div
                 key={appt.id}
                 className="card flex items-center gap-4 py-3.5 cursor-pointer hover:shadow-card-hover transition-shadow"
-                onClick={() => navigate(`/patients/${appt.patient_id}`)}
+                onClick={() => setApptModal(appt)}
               >
                 <div className="flex flex-col items-center w-14 flex-shrink-0">
                   <span className="font-body text-sm font-semibold text-primary leading-none">
-                    {format(parseISO(appt.appointment_date), 'h:mm')}
+                    {format(parseApptDateLocal(appt.appointment_date), 'h:mm')}
                   </span>
                   <span className="font-body text-[10px] text-gray-400 mt-0.5">
-                    {format(parseISO(appt.appointment_date), 'a')}
+                    {format(parseApptDateLocal(appt.appointment_date), 'a')}
                   </span>
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="font-body text-sm font-semibold text-gray-700 truncate">{appt.title}</p>
-                  <p className="font-body text-xs text-gray-400 truncate">
-                    <User size={10} className="inline mr-1 mb-0.5" />
-                    {appt.patients?.first_name} {appt.patients?.last_name}
-                  </p>
+                  {appt.patients ? (
+                    <p className="font-body text-xs text-gray-400 truncate">
+                      <User size={10} className="inline mr-1 mb-0.5" />
+                      {appt.patients.first_name} {appt.patients.last_name}
+                    </p>
+                  ) : appt.location ? (
+                    <p className="font-body text-xs text-gray-400 truncate">{appt.location}</p>
+                  ) : null}
                 </div>
                 {appt.appointment_type && (
                   <span className={`tag border text-[10px] flex-shrink-0 ${APPT_TYPE_COLORS[appt.appointment_type] || APPT_TYPE_COLORS['Other']}`}>
@@ -230,7 +372,6 @@ export default function Dashboard() {
           <span className="tag bg-primary-light text-primary ml-1">{patients.length}</span>
         </div>
 
-        {/* Search bar */}
         <div className="relative mb-5">
           <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-300 pointer-events-none" />
           <input
@@ -264,7 +405,7 @@ export default function Dashboard() {
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
             {filteredPatients.map((patient) => {
-              const lastActivity = getLastActivityDate(patient)
+              const lastActivity = getMostRecentActivity(patient)
               const nextAppt    = getNextAppointment(patient)
 
               return (
@@ -274,7 +415,6 @@ export default function Dashboard() {
                   className="group cursor-pointer rounded-2xl bg-white border border-gray-100 border-l-[3px] border-l-transparent hover:border-l-mauve shadow-sm hover:shadow-card-hover transition-all duration-200"
                 >
                   <div className="p-5">
-                    {/* Name + active badge */}
                     <div className="flex items-start justify-between gap-2 mb-2">
                       <h3 className="font-heading text-xl font-semibold text-gray-800 group-hover:text-primary transition-colors leading-tight">
                         {patient.first_name} {patient.last_name}
@@ -284,7 +424,7 @@ export default function Dashboard() {
                       </span>
                     </div>
 
-                    {/* Quick description — editable on click */}
+                    {/* Quick description — inline editable */}
                     {editingDesc?.id === patient.id ? (
                       <input
                         autoFocus
@@ -315,19 +455,17 @@ export default function Dashboard() {
                       </p>
                     )}
 
-                    {/* Next appointment */}
                     <div className="flex items-start gap-1.5 mb-3">
                       <Calendar size={11} className="text-primary mt-0.5 flex-shrink-0" />
                       {nextAppt ? (
                         <span className="font-body text-[11px] text-gray-600 truncate">
-                          {format(parseISO(nextAppt.appointment_date), 'MMM d')} · {nextAppt.title}
+                          {format(parseApptDateLocal(nextAppt.appointment_date), 'MMM d')} · {nextAppt.title}
                         </span>
                       ) : (
                         <span className="font-body text-[11px] text-gray-300 italic">No upcoming appointments</span>
                       )}
                     </div>
 
-                    {/* Footer: last activity */}
                     <div className="flex items-center justify-between pt-3 border-t border-gray-50">
                       {lastActivity ? (
                         <span className="font-body text-[11px] text-gray-400 flex items-center gap-1.5">
@@ -344,7 +482,6 @@ export default function Dashboard() {
               )
             })}
 
-            {/* Add patient card */}
             <div
               onClick={() => navigate('/intake')}
               className="card cursor-pointer border-2 border-dashed border-gray-100 flex flex-col items-center justify-center text-center py-8 hover:border-primary/30 hover:shadow-card-hover transition-all duration-200 min-h-[180px]"
@@ -378,7 +515,7 @@ export default function Dashboard() {
           {showInactive && (
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
               {inactivePatients.map((patient) => {
-                const lastActivity = getLastActivityDate(patient)
+                const lastActivity = getMostRecentActivity(patient)
                 const nextAppt    = getNextAppointment(patient)
                 return (
                   <div
@@ -406,7 +543,7 @@ export default function Dashboard() {
                         <Calendar size={11} className="text-gray-300 mt-0.5 flex-shrink-0" />
                         {nextAppt ? (
                           <span className="font-body text-[11px] text-gray-400 truncate">
-                            {format(parseISO(nextAppt.appointment_date), 'MMM d')} · {nextAppt.title}
+                            {format(parseApptDateLocal(nextAppt.appointment_date), 'MMM d')} · {nextAppt.title}
                           </span>
                         ) : (
                           <span className="font-body text-[11px] text-gray-300 italic">No upcoming appointments</span>
@@ -433,6 +570,436 @@ export default function Dashboard() {
         </section>
       )}
 
+      {/* Add Event Modal */}
+      {showAddModal && (
+        <AddEventModal
+          onClose={() => setShowAddModal(false)}
+          onSave={saveEvent}
+          saving={savingEvent}
+          defaultDate={viewDate}
+          patients={patients}
+        />
+      )}
+
+      {/* Appointment Detail Modal */}
+      {apptModal && (
+        <ApptDetailModal
+          appt={apptModal}
+          onClose={() => setApptModal(null)}
+          onUpdate={updateAppt}
+          onDelete={deleteAppt}
+          onViewPatient={pid => navigate(`/patients/${pid}`)}
+          saving={savingApptUpdate}
+          patients={patients}
+        />
+      )}
+
+    </div>
+  )
+}
+
+// ── ApptDetailModal ────────────────────────────────────────────────────────────
+function ApptDetailModal({ appt, onClose, onUpdate, onDelete, onViewPatient, saving, patients }) {
+  const [mode, setMode] = useState('view')
+  const [draft, setDraft] = useState({ ...appt })
+
+  const knownTypes = APPT_TYPES.slice(0, -1)
+  const initIsOther = !!appt.appointment_type && !knownTypes.includes(appt.appointment_type)
+  const [typeIsOther, setTypeIsOther] = useState(initIsOther)
+  const [otherTypeText, setOtherTypeText] = useState(initIsOther ? appt.appointment_type : '')
+
+  useEffect(() => {
+    setDraft({ ...appt })
+    const isOther = !!appt.appointment_type && !knownTypes.includes(appt.appointment_type)
+    setTypeIsOther(isOther)
+    setOtherTypeText(isOther ? appt.appointment_type : '')
+    setMode('view')
+  }, [appt.id])
+
+  function handleSave() {
+    const finalType = typeIsOther ? otherTypeText.trim() : draft.appointment_type
+    const { patients: _p, created_at: _ca, ...fields } = draft
+    onUpdate(appt.id, { ...fields, appointment_type: finalType || null })
+  }
+
+  const typeColor = appt.appointment_type
+    ? (APPT_TYPE_COLORS[appt.appointment_type] || APPT_TYPE_COLORS['Other'])
+    : null
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      onClick={e => { if (e.target === e.currentTarget) onClose() }}
+    >
+      <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" />
+      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-lg flex flex-col overflow-hidden">
+
+        {mode === 'view' ? (
+          <>
+            {/* View header — title + icon buttons */}
+            <div className="flex items-start gap-4 px-7 pt-6 pb-5">
+              <div className="flex-1 min-w-0">
+                <h2 className="font-heading text-2xl font-semibold text-gray-800 leading-snug">
+                  {appt.title || 'Appointment'}
+                </h2>
+                {typeColor && (
+                  <span className={`inline-flex mt-2 tag border text-[10px] ${typeColor}`}>
+                    {appt.appointment_type}
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-1 flex-shrink-0 mt-0.5">
+                <button
+                  onClick={() => setMode('edit')}
+                  title="Edit"
+                  className="w-8 h-8 flex items-center justify-center rounded-lg text-gray-400 hover:text-primary hover:bg-primary-light transition-colors"
+                >
+                  <Edit3 size={15} />
+                </button>
+                <button
+                  onClick={() => onDelete(appt.id)}
+                  title="Delete"
+                  className="w-8 h-8 flex items-center justify-center rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors"
+                >
+                  <Trash2 size={15} />
+                </button>
+                <button
+                  onClick={onClose}
+                  title="Close"
+                  className="w-8 h-8 flex items-center justify-center rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors ml-1"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+            </div>
+
+            {/* View content */}
+            <div className="px-7 pb-5 space-y-4 border-t border-gray-100 pt-5 overflow-y-auto">
+              {appt.appointment_date && (
+                <div>
+                  <p className="label">Date &amp; Time</p>
+                  <p className="font-body text-sm text-gray-700 mt-0.5">
+                    {format(parseApptDateLocal(appt.appointment_date), 'MMMM d, yyyy')}
+                    <span className="text-gray-400 mx-1.5">·</span>
+                    {format(parseApptDateLocal(appt.appointment_date), 'h:mm a')}
+                  </p>
+                </div>
+              )}
+              {appt.patients && (
+                <div>
+                  <p className="label">Patient</p>
+                  <p className="font-body text-sm text-gray-700 mt-0.5">
+                    {appt.patients.first_name} {appt.patients.last_name}
+                  </p>
+                </div>
+              )}
+              {appt.provider && (
+                <div>
+                  <p className="label">Provider</p>
+                  <p className="font-body text-sm text-gray-700 mt-0.5">{appt.provider}</p>
+                </div>
+              )}
+              {appt.location && (
+                <div>
+                  <p className="label">Location</p>
+                  <p className="font-body text-sm text-gray-700 mt-0.5">{appt.location}</p>
+                </div>
+              )}
+              {appt.notes && (
+                <div>
+                  <p className="label">Notes</p>
+                  <p className="font-body text-sm text-gray-700 mt-0.5 leading-relaxed whitespace-pre-line">
+                    {appt.notes}
+                  </p>
+                </div>
+              )}
+              {!appt.appointment_date && !appt.patients && !appt.provider && !appt.location && !appt.notes && (
+                <p className="font-body text-sm text-gray-400 italic">No additional details.</p>
+              )}
+            </div>
+
+            {/* View footer */}
+            <div className="flex items-center justify-between px-7 py-4 border-t border-gray-100 flex-shrink-0">
+              <div>
+                {appt.patient_id && (
+                  <button
+                    onClick={() => onViewPatient(appt.patient_id)}
+                    className="btn-primary flex items-center gap-2 py-2 px-4 text-sm"
+                  >
+                    <ExternalLink size={13} />
+                    View Patient Profile
+                  </button>
+                )}
+              </div>
+              <button
+                onClick={onClose}
+                className="btn-ghost py-2 px-4 text-sm"
+              >
+                Close
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            {/* Edit header */}
+            <div className="flex items-center justify-between px-7 py-4 border-b border-gray-100 flex-shrink-0">
+              <h2 className="font-heading text-xl font-semibold text-gray-800">Edit Appointment</h2>
+              <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors">
+                <X size={16} />
+              </button>
+            </div>
+
+            {/* Edit fields */}
+            <div className="px-7 py-5 space-y-3.5 overflow-y-auto max-h-[60vh]">
+              <div>
+                <label className="label">Title *</label>
+                <input
+                  className="input mt-1"
+                  value={draft.title || ''}
+                  onChange={e => setDraft(d => ({ ...d, title: e.target.value }))}
+                  autoFocus
+                />
+              </div>
+              <div>
+                <label className="label">Type</label>
+                <select
+                  className="input mt-1"
+                  value={typeIsOther ? 'Other' : (draft.appointment_type || '')}
+                  onChange={e => {
+                    if (e.target.value === 'Other') {
+                      setTypeIsOther(true)
+                      setDraft(d => ({ ...d, appointment_type: '' }))
+                    } else {
+                      setTypeIsOther(false)
+                      setOtherTypeText('')
+                      setDraft(d => ({ ...d, appointment_type: e.target.value }))
+                    }
+                  }}
+                >
+                  <option value="">Select type…</option>
+                  {APPT_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+                {typeIsOther && (
+                  <input
+                    className="input mt-1.5"
+                    placeholder="Describe the type…"
+                    value={otherTypeText}
+                    onChange={e => setOtherTypeText(e.target.value)}
+                  />
+                )}
+              </div>
+              <div>
+                <label className="label">Date &amp; Time</label>
+                <input
+                  type="datetime-local"
+                  className="input mt-1"
+                  value={draft.appointment_date ? draft.appointment_date.slice(0, 16) : ''}
+                  onChange={e => setDraft(d => ({ ...d, appointment_date: e.target.value }))}
+                />
+              </div>
+              <div>
+                <label className="label">
+                  Assign to Patient <span className="text-gray-400 font-normal normal-case tracking-normal">(optional)</span>
+                </label>
+                <select
+                  className="input mt-1"
+                  value={draft.patient_id || ''}
+                  onChange={e => setDraft(d => ({ ...d, patient_id: e.target.value || null }))}
+                >
+                  <option value="">No patient assigned</option>
+                  {patients.map(p => (
+                    <option key={p.id} value={p.id}>{p.first_name} {p.last_name}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="label">Provider</label>
+                <input
+                  className="input mt-1"
+                  placeholder="Provider name"
+                  value={draft.provider || ''}
+                  onChange={e => setDraft(d => ({ ...d, provider: e.target.value }))}
+                />
+              </div>
+              <div>
+                <label className="label">Location</label>
+                <input
+                  className="input mt-1"
+                  placeholder="Location"
+                  value={draft.location || ''}
+                  onChange={e => setDraft(d => ({ ...d, location: e.target.value }))}
+                />
+              </div>
+              <div>
+                <label className="label">Notes</label>
+                <textarea
+                  className="input mt-1 resize-none"
+                  rows={3}
+                  value={draft.notes || ''}
+                  onChange={e => setDraft(d => ({ ...d, notes: e.target.value }))}
+                />
+              </div>
+            </div>
+
+            {/* Edit footer */}
+            <div className="flex gap-2.5 px-7 py-4 border-t border-gray-100 flex-shrink-0">
+              <button onClick={() => setMode('view')} className="btn-ghost flex-1 py-2 text-sm">
+                Cancel
+              </button>
+              <button
+                onClick={handleSave}
+                disabled={saving || !draft.title?.trim() || !draft.appointment_date}
+                className="btn-primary flex-1 py-2 text-sm disabled:opacity-50"
+              >
+                {saving ? 'Saving…' : 'Save Changes'}
+              </button>
+            </div>
+          </>
+        )}
+
+      </div>
+    </div>
+  )
+}
+
+// ── AddEventModal ──────────────────────────────────────────────────────────────
+function AddEventModal({ onClose, onSave, saving, defaultDate, patients }) {
+  const defaultDateStr = format(defaultDate, "yyyy-MM-dd'T'09:00")
+  const [draft, setDraft] = useState({
+    title: '',
+    appointment_type: '',
+    appointment_date: defaultDateStr,
+    patient_id: '',
+    provider: '',
+    location: '',
+    notes: '',
+  })
+  const [typeIsOther, setTypeIsOther] = useState(false)
+  const [otherTypeText, setOtherTypeText] = useState('')
+
+  function handleSave() {
+    const finalType = typeIsOther ? otherTypeText.trim() : draft.appointment_type
+    onSave({ ...draft, appointment_type: finalType || null, patient_id: draft.patient_id || null })
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      onClick={e => { if (e.target === e.currentTarget) onClose() }}
+    >
+      <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" />
+      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md flex flex-col overflow-hidden">
+
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 flex-shrink-0">
+          <h2 className="font-heading text-xl font-semibold text-gray-800">Add Event</h2>
+          <button onClick={onClose} className="p-1.5 text-gray-400 hover:text-gray-600 transition-colors">
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="px-6 py-5 space-y-3 overflow-y-auto max-h-[70vh]">
+          <div>
+            <label className="label">Title *</label>
+            <input
+              className="input"
+              placeholder="Event title"
+              value={draft.title}
+              onChange={e => setDraft(d => ({ ...d, title: e.target.value }))}
+              autoFocus
+            />
+          </div>
+          <div>
+            <label className="label">Type</label>
+            <select
+              className="input"
+              value={typeIsOther ? 'Other' : draft.appointment_type}
+              onChange={e => {
+                if (e.target.value === 'Other') {
+                  setTypeIsOther(true)
+                  setDraft(d => ({ ...d, appointment_type: '' }))
+                } else {
+                  setTypeIsOther(false)
+                  setOtherTypeText('')
+                  setDraft(d => ({ ...d, appointment_type: e.target.value }))
+                }
+              }}
+            >
+              <option value="">Select type…</option>
+              {APPT_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+            </select>
+            {typeIsOther && (
+              <input
+                className="input mt-1.5"
+                placeholder="Describe the type…"
+                value={otherTypeText}
+                onChange={e => setOtherTypeText(e.target.value)}
+              />
+            )}
+          </div>
+          <div>
+            <label className="label">Date &amp; Time</label>
+            <input
+              type="datetime-local"
+              className="input"
+              value={draft.appointment_date}
+              onChange={e => setDraft(d => ({ ...d, appointment_date: e.target.value }))}
+            />
+          </div>
+          <div>
+            <label className="label">Assign to Patient <span className="text-gray-400 font-normal">(optional)</span></label>
+            <select
+              className="input"
+              value={draft.patient_id}
+              onChange={e => setDraft(d => ({ ...d, patient_id: e.target.value }))}
+            >
+              <option value="">No patient assigned</option>
+              {patients.map(p => (
+                <option key={p.id} value={p.id}>{p.first_name} {p.last_name}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="label">Provider</label>
+            <input
+              className="input"
+              placeholder="Provider name"
+              value={draft.provider}
+              onChange={e => setDraft(d => ({ ...d, provider: e.target.value }))}
+            />
+          </div>
+          <div>
+            <label className="label">Location</label>
+            <input
+              className="input"
+              placeholder="Location"
+              value={draft.location}
+              onChange={e => setDraft(d => ({ ...d, location: e.target.value }))}
+            />
+          </div>
+          <div>
+            <label className="label">Notes</label>
+            <textarea
+              className="input resize-none"
+              rows={3}
+              placeholder="Additional notes…"
+              value={draft.notes}
+              onChange={e => setDraft(d => ({ ...d, notes: e.target.value }))}
+            />
+          </div>
+        </div>
+
+        <div className="flex gap-2 px-6 py-4 border-t border-gray-100 flex-shrink-0">
+          <button onClick={onClose} className="btn-ghost flex-1 py-2 text-sm">Cancel</button>
+          <button
+            onClick={handleSave}
+            disabled={saving || !draft.title?.trim() || !draft.appointment_date}
+            className="btn-primary flex-1 py-2 text-sm disabled:opacity-50"
+          >
+            {saving ? 'Saving…' : 'Add Event'}
+          </button>
+        </div>
+
+      </div>
     </div>
   )
 }

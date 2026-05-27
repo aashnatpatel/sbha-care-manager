@@ -31,8 +31,14 @@ CREATE TABLE patients (
   reason_for_advocacy TEXT,
   top_goals TEXT[], -- array of up to 3 goals
   overwhelming_factors TEXT[], -- checkboxes
-  care_experience JSONB -- {clarity, feels_heard, num_doctors, desires_coordination}
+  care_experience JSONB, -- {clarity, feels_heard, num_doctors, desires_coordination}
+
+  -- Quick note shown on dashboard card and patient profile header
+  quick_description TEXT
 );
+
+-- Migration (run if patients table already exists):
+-- ALTER TABLE patients ADD COLUMN IF NOT EXISTS quick_description TEXT;
 
 -- Conditions table
 CREATE TABLE conditions (

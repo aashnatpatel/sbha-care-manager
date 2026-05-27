@@ -29,8 +29,8 @@ export default function Layout({ children }) {
       {/* Sidebar */}
       <aside className="w-60 flex-shrink-0 bg-white border-r border-gray-100 flex flex-col">
         {/* Logo */}
-        <div className="px-6 py-7 border-b border-gray-100 flex items-center justify-center">
-          <img src={sbhaLogo} alt="SBHA" className="h-16 w-auto object-contain" />
+        <div className="px-6 py-9 border-b border-gray-100 flex items-center justify-center">
+          <img src={sbhaLogo} alt="SBHA" className="h-20 w-auto object-contain" />
         </div>
 
         {/* Nav */}

@@ -27,6 +27,12 @@ function formatTime(t) {
   const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h
   return `${h12}:${(m || 0).toString().padStart(2, '0')} ${ampm}`
 }
+// Parse appointment datetime as local time (strips tz offset from TIMESTAMPTZ string)
+// Prevents UTC→local conversion shifting times when stored without explicit offset
+function parseApptDateLocal(dateStr) {
+  if (!dateStr) return new Date(0)
+  return parseISO(dateStr.slice(0, 16))
+}
 function scheduleRowsToBlocks(rows) {
   if (!rows || rows.length === 0) return [{ tempId: '0', days: [], start_time: '', end_time: '' }]
   const groups = {}
@@ -197,6 +203,10 @@ export default function PatientProfile() {
   const [savingAppt, setSavingAppt] = useState(false)
   const [calViewDate, setCalViewDate] = useState(new Date())
   const [calSelectedDate, setCalSelectedDate] = useState(null) // 'yyyy-MM-dd' | null
+
+  // Quick note (header)
+  const [editingQuickNote, setEditingQuickNote] = useState(false)
+  const [quickNoteValue, setQuickNoteValue] = useState('')
 
   // Documents
   const [uploadingDoc, setUploadingDoc] = useState(false)
@@ -566,6 +576,13 @@ export default function PatientProfile() {
     setDeletedNotes(prev => prev.filter(n => n.id !== noteId))
   }
 
+  // ── Quick Note ────────────────────────────────────────────────
+  async function saveQuickNote() {
+    await supabase.from('patients').update({ quick_description: quickNoteValue }).eq('id', id)
+    setPatient(prev => ({ ...prev, quick_description: quickNoteValue }))
+    setEditingQuickNote(false)
+  }
+
   // ── Appointments ──────────────────────────────────────────────
   // resolvedDraft comes from AppointmentModal's local state (not apptModal.draft, which is the initial snapshot)
   async function saveApptModal(resolvedDraft) {
@@ -651,7 +668,7 @@ export default function PatientProfile() {
   function exportProfilePDF() {
     const age = patient?.dob ? differenceInYears(new Date(), parseISO(patient.dob)) : null
     const upcoming = appointments
-      .filter(a => !a.completed && isAfter(parseISO(a.appointment_date), startOfDay(new Date())))
+      .filter(a => !a.completed && isAfter(parseApptDateLocal(a.appointment_date), startOfDay(new Date())))
       .sort((a, b) => new Date(a.appointment_date) - new Date(b.appointment_date))
 
     function field(label, value) {
@@ -807,8 +824,8 @@ export default function PatientProfile() {
       <div class="card">
         <div class="appt-row">
           <div>
-            <div class="appt-date">${format(parseISO(a.appointment_date), 'MMM d, yyyy')}</div>
-            <div class="appt-time">${format(parseISO(a.appointment_date), 'h:mm a')}</div>
+            <div class="appt-date">${format(parseApptDateLocal(a.appointment_date), 'MMM d, yyyy')}</div>
+            <div class="appt-time">${format(parseApptDateLocal(a.appointment_date), 'h:mm a')}</div>
           </div>
           <div style="flex:1;">
             <div class="card-title">${a.title}</div>
@@ -841,8 +858,8 @@ export default function PatientProfile() {
     const condList = conditions.map(c => c.name).join(', ') || 'None'
     const medList = medications.map(m => [m.name, m.dose, m.frequency].filter(Boolean).join(' ')).join('; ') || 'None'
     const recentNotes = notes.slice(0, 3).map(n => n.title || '').filter(Boolean).join(', ') || 'No recent notes'
-    const upcoming = appointments.filter(a => new Date(a.appointment_date) >= new Date()).slice(0, 3)
-      .map(a => `${a.title} on ${format(parseISO(a.appointment_date), 'MMM d')}`).join(', ') || 'None'
+    const upcoming = appointments.filter(a => parseApptDateLocal(a.appointment_date) >= new Date()).slice(0, 3)
+      .map(a => `${a.title} on ${format(parseApptDateLocal(a.appointment_date), 'MMM d')}`).join(', ') || 'None'
     await new Promise(r => setTimeout(r, 600))
     setAiSummary(`${patient?.first_name} ${patient?.last_name} is a ${age}-year-old patient managing ${condList}. Current medications: ${medList}. Recent notes: ${recentNotes}. Upcoming appointments: ${upcoming}.`)
     setAiLoading(false)
@@ -863,8 +880,8 @@ export default function PatientProfile() {
 
   const age = patient.dob ? differenceInYears(new Date(), parseISO(patient.dob)) : null
   const now = startOfDay(new Date())
-  const upcomingAppts = appointments.filter(a => !a.completed && isAfter(new Date(a.appointment_date), now))
-  const pastAppts = [...appointments.filter(a => a.completed || !isAfter(new Date(a.appointment_date), now))]
+  const upcomingAppts = appointments.filter(a => !a.completed && isAfter(parseApptDateLocal(a.appointment_date), now))
+  const pastAppts = [...appointments.filter(a => a.completed || !isAfter(parseApptDateLocal(a.appointment_date), now))]
     .sort((a, b) => new Date(b.appointment_date) - new Date(a.appointment_date))
   // ── Notes filtering (client-side) ─────────────────────────────
   const filtersActive = noteTypeFilter !== 'All' || !!noteDateFrom
@@ -919,6 +936,34 @@ export default function PatientProfile() {
                 {patient.status}
               </span>
             </div>
+
+            {/* Quick note — inline editable */}
+            {editingQuickNote ? (
+              <input
+                autoFocus
+                className="mt-2 w-full max-w-md font-body text-sm text-gray-600 bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:border-primary/40 focus:ring-1 focus:ring-primary/10 transition-all"
+                value={quickNoteValue}
+                onChange={e => setQuickNoteValue(e.target.value)}
+                onBlur={saveQuickNote}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') saveQuickNote()
+                  if (e.key === 'Escape') setEditingQuickNote(false)
+                }}
+                placeholder="Add a quick note…"
+              />
+            ) : (
+              <p
+                className={`mt-2 font-body text-sm cursor-text transition-colors ${
+                  patient.quick_description
+                    ? 'text-gray-500 hover:text-gray-700'
+                    : 'text-gray-300 italic hover:text-gray-400'
+                }`}
+                onClick={() => { setQuickNoteValue(patient.quick_description || ''); setEditingQuickNote(true) }}
+                title="Click to edit"
+              >
+                {patient.quick_description || 'Add a quick note…'}
+              </p>
+            )}
           </div>
 
           <div className="flex items-center gap-3 flex-wrap">
@@ -1632,7 +1677,7 @@ export default function PatientProfile() {
                               )}
                               <p className="font-body text-sm font-semibold text-gray-700 truncate">{appt.title}</p>
                               <p className="font-body text-xs text-primary font-medium mt-0.5">
-                                {format(parseISO(appt.appointment_date), 'MMM d · h:mm a')}
+                                {format(parseApptDateLocal(appt.appointment_date), 'MMM d · h:mm a')}
                               </p>
                               {appt.provider && <p className="font-body text-xs text-gray-500">with {appt.provider}</p>}
                             </div>
@@ -1706,7 +1751,7 @@ export default function PatientProfile() {
                                 </div>
                                 <p className="font-body text-sm font-medium text-gray-500 truncate">{appt.title}</p>
                                 <p className="font-body text-xs text-gray-400 mt-0.5">
-                                  {format(parseISO(appt.appointment_date), 'MMM d, yyyy · h:mm a')}
+                                  {format(parseApptDateLocal(appt.appointment_date), 'MMM d, yyyy · h:mm a')}
                                 </p>
                                 {appt.provider && <p className="font-body text-xs text-gray-400">with {appt.provider}</p>}
                                 {appt.location && <p className="font-body text-xs text-gray-400">{appt.location}</p>}
@@ -2803,7 +2848,7 @@ function CalendarWidget({ viewDate, onPrev, onNext, appointments, selectedDate, 
                 )}
                 <p className="font-body text-sm font-semibold text-gray-700">{appt.title}</p>
                 <p className="font-body text-xs text-primary font-medium mt-0.5">
-                  {format(parseISO(appt.appointment_date), 'h:mm a')}
+                  {format(parseApptDateLocal(appt.appointment_date), 'h:mm a')}
                 </p>
                 {appt.provider && <p className="font-body text-xs text-gray-500">with {appt.provider}</p>}
                 {appt.location && <p className="font-body text-xs text-gray-400">{appt.location}</p>}
@@ -2825,15 +2870,15 @@ function AppointmentModal({ modal, onClose, onSave, onDelete, saving }) {
   const [mode, setMode] = useState(modal.mode === 'view' ? 'view' : 'edit')
   const [draft, setDraft] = useState({ ...initialAppt })
 
-  const isOtherType = !!draft.appointment_type && !APPT_TYPES.slice(0, -1).includes(draft.appointment_type) && draft.appointment_type !== ''
-  const [typeIsOther, setTypeIsOther] = useState(isOtherType)
-  const [otherTypeText, setOtherTypeText] = useState(isOtherType ? draft.appointment_type : '')
-
-  const dateInputVal = draft.appointment_date ? draft.appointment_date.slice(0, 16) : ''
+  const knownTypes = APPT_TYPES.slice(0, -1)
+  const initIsOther = !!draft.appointment_type && !knownTypes.includes(draft.appointment_type) && draft.appointment_type !== ''
+  const [typeIsOther, setTypeIsOther] = useState(initIsOther)
+  const [otherTypeText, setOtherTypeText] = useState(initIsOther ? draft.appointment_type : '')
 
   function enterEditMode() {
-    setTypeIsOther(isOtherType)
-    setOtherTypeText(isOtherType ? draft.appointment_type : '')
+    const isOther = !!draft.appointment_type && !knownTypes.includes(draft.appointment_type) && draft.appointment_type !== ''
+    setTypeIsOther(isOther)
+    setOtherTypeText(isOther ? draft.appointment_type : '')
     setMode('edit')
   }
 
@@ -2849,165 +2894,200 @@ function AppointmentModal({ modal, onClose, onSave, onDelete, saving }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
       <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" />
-      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md flex flex-col overflow-hidden">
+      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-lg flex flex-col overflow-hidden">
 
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 flex-shrink-0">
-          <div className="flex items-center gap-2.5 min-w-0">
-            {mode === 'view' && typeColor && (
-              <span className={`tag border text-[10px] flex-shrink-0 ${typeColor}`}>
-                {draft.appointment_type}
-              </span>
-            )}
-            <h2 className="font-heading text-xl font-semibold text-gray-800 truncate">
-              {isNew ? 'Add Appointment' : (mode === 'view' ? (draft.title || 'Appointment') : 'Edit Appointment')}
-            </h2>
-          </div>
-          <div className="flex items-center gap-2 flex-shrink-0">
-            {mode === 'view' && (
-              <>
+        {mode === 'view' ? (
+          <>
+            {/* View header — full title + icon buttons */}
+            <div className="flex items-start gap-4 px-7 pt-6 pb-5">
+              <div className="flex-1 min-w-0">
+                <h2 className="font-heading text-2xl font-semibold text-gray-800 leading-snug">
+                  {draft.title || 'Appointment'}
+                </h2>
+                {typeColor && (
+                  <span className={`inline-flex mt-2 tag border text-[10px] ${typeColor}`}>
+                    {draft.appointment_type}
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-1 flex-shrink-0 mt-0.5">
                 <button
                   onClick={enterEditMode}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-body text-xs font-medium text-primary bg-primary-light hover:bg-primary/20 transition-colors"
+                  title="Edit"
+                  className="w-8 h-8 flex items-center justify-center rounded-lg text-gray-400 hover:text-primary hover:bg-primary-light transition-colors"
                 >
-                  <Edit3 size={12} /> Edit
+                  <Edit3 size={15} />
                 </button>
                 <button
                   onClick={() => onDelete(draft.id)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-body text-xs font-medium text-red-500 bg-red-50 hover:bg-red-100 transition-colors"
+                  title="Delete"
+                  className="w-8 h-8 flex items-center justify-center rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors"
                 >
-                  <Trash2 size={12} /> Delete
+                  <Trash2 size={15} />
                 </button>
-              </>
-            )}
-            <button onClick={onClose} className="p-1.5 text-gray-400 hover:text-gray-600 transition-colors"><X size={18} /></button>
-          </div>
-        </div>
-
-        {/* Content */}
-        {mode === 'view' ? (
-          <div className="px-6 py-5 space-y-4 overflow-y-auto">
-            <div>
-              <p className="label">Date &amp; Time</p>
-              <p className="font-body text-sm text-gray-700">
-                {draft.appointment_date
-                  ? format(parseISO(draft.appointment_date), 'MMMM d, yyyy · h:mm a')
-                  : '—'}
-              </p>
+                <button
+                  onClick={onClose}
+                  title="Close"
+                  className="w-8 h-8 flex items-center justify-center rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors ml-1"
+                >
+                  <X size={16} />
+                </button>
+              </div>
             </div>
-            {draft.provider && (
-              <div>
-                <p className="label">Provider</p>
-                <p className="font-body text-sm text-gray-700">{draft.provider}</p>
-              </div>
-            )}
-            {draft.location && (
-              <div>
-                <p className="label">Location</p>
-                <p className="font-body text-sm text-gray-700">{draft.location}</p>
-              </div>
-            )}
-            {draft.notes && (
-              <div>
-                <p className="label">Notes</p>
-                <p className="font-body text-sm text-gray-700 leading-relaxed">{draft.notes}</p>
-              </div>
-            )}
-            {!draft.provider && !draft.location && !draft.notes && (
-              <p className="font-body text-sm text-gray-400 italic">No additional details.</p>
-            )}
-          </div>
-        ) : (
-          <div className="px-6 py-5 space-y-3 overflow-y-auto max-h-[70vh]">
-            <Field label="Title *">
-              <input
-                className="input"
-                placeholder="Appointment title"
-                value={draft.title || ''}
-                onChange={e => setDraft(d => ({ ...d, title: e.target.value }))}
-                autoFocus
-              />
-            </Field>
-            <Field label="Type">
-              <select
-                className="input"
-                value={typeIsOther ? 'Other' : (draft.appointment_type || '')}
-                onChange={e => {
-                  if (e.target.value === 'Other') {
-                    setTypeIsOther(true)
-                    setDraft(d => ({ ...d, appointment_type: '' }))
-                  } else {
-                    setTypeIsOther(false)
-                    setOtherTypeText('')
-                    setDraft(d => ({ ...d, appointment_type: e.target.value }))
-                  }
-                }}
-              >
-                <option value="">Select type…</option>
-                {APPT_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
-              </select>
-              {typeIsOther && (
-                <input
-                  className="input mt-1.5"
-                  placeholder="Describe the appointment type…"
-                  value={otherTypeText}
-                  onChange={e => setOtherTypeText(e.target.value)}
-                />
-              )}
-            </Field>
-            <Field label="Date &amp; Time">
-              <input
-                type="datetime-local"
-                className="input"
-                value={dateInputVal}
-                onChange={e => setDraft(d => ({ ...d, appointment_date: e.target.value }))}
-              />
-            </Field>
-            <Field label="Provider">
-              <input
-                className="input"
-                placeholder="Provider name"
-                value={draft.provider || ''}
-                onChange={e => setDraft(d => ({ ...d, provider: e.target.value }))}
-              />
-            </Field>
-            <Field label="Location">
-              <input
-                className="input"
-                placeholder="Location"
-                value={draft.location || ''}
-                onChange={e => setDraft(d => ({ ...d, location: e.target.value }))}
-              />
-            </Field>
-            <Field label="Notes">
-              <textarea
-                className="input resize-none"
-                rows={3}
-                placeholder="Additional notes…"
-                value={draft.notes || ''}
-                onChange={e => setDraft(d => ({ ...d, notes: e.target.value }))}
-              />
-            </Field>
-          </div>
-        )}
 
-        {/* Footer — edit/new only */}
-        {mode === 'edit' && (
-          <div className="flex gap-2 px-6 py-4 border-t border-gray-100 flex-shrink-0">
-            <button
-              onClick={() => isNew ? onClose() : setMode('view')}
-              className="btn-ghost flex-1 py-2 text-sm"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={handleSave}
-              disabled={saving || !draft.title?.trim() || !draft.appointment_date}
-              className="btn-primary flex-1 py-2 text-sm disabled:opacity-50"
-            >
-              {saving ? 'Saving…' : (isNew ? 'Add Appointment' : 'Save Changes')}
-            </button>
-          </div>
+            {/* View content */}
+            <div className="px-7 pb-5 space-y-4 border-t border-gray-100 pt-5 overflow-y-auto">
+              {draft.appointment_date && (
+                <div>
+                  <p className="label">Date &amp; Time</p>
+                  <p className="font-body text-sm text-gray-700 mt-0.5">
+                    {format(parseApptDateLocal(draft.appointment_date), 'MMMM d, yyyy')}
+                    <span className="text-gray-400 mx-1.5">·</span>
+                    {format(parseApptDateLocal(draft.appointment_date), 'h:mm a')}
+                  </p>
+                </div>
+              )}
+              {draft.provider && (
+                <div>
+                  <p className="label">Provider</p>
+                  <p className="font-body text-sm text-gray-700 mt-0.5">{draft.provider}</p>
+                </div>
+              )}
+              {draft.location && (
+                <div>
+                  <p className="label">Location</p>
+                  <p className="font-body text-sm text-gray-700 mt-0.5">{draft.location}</p>
+                </div>
+              )}
+              {draft.notes && (
+                <div>
+                  <p className="label">Notes</p>
+                  <p className="font-body text-sm text-gray-700 mt-0.5 leading-relaxed whitespace-pre-line">
+                    {draft.notes}
+                  </p>
+                </div>
+              )}
+              {!draft.provider && !draft.location && !draft.notes && (
+                <p className="font-body text-sm text-gray-400 italic">No additional details.</p>
+              )}
+            </div>
+
+            {/* View footer */}
+            <div className="flex items-center justify-end px-7 py-4 border-t border-gray-100 flex-shrink-0">
+              <button onClick={onClose} className="btn-ghost py-2 px-4 text-sm">Close</button>
+            </div>
+          </>
+        ) : (
+          <>
+            {/* Edit / New header */}
+            <div className="flex items-center justify-between px-7 py-4 border-b border-gray-100 flex-shrink-0">
+              <h2 className="font-heading text-xl font-semibold text-gray-800">
+                {isNew ? 'Add Appointment' : 'Edit Appointment'}
+              </h2>
+              <button
+                onClick={onClose}
+                className="w-8 h-8 flex items-center justify-center rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            {/* Edit fields */}
+            <div className="px-7 py-5 space-y-3.5 overflow-y-auto max-h-[65vh]">
+              <div>
+                <label className="label">Title *</label>
+                <input
+                  className="input mt-1"
+                  placeholder="Appointment title"
+                  value={draft.title || ''}
+                  onChange={e => setDraft(d => ({ ...d, title: e.target.value }))}
+                  autoFocus
+                />
+              </div>
+              <div>
+                <label className="label">Type</label>
+                <select
+                  className="input mt-1"
+                  value={typeIsOther ? 'Other' : (draft.appointment_type || '')}
+                  onChange={e => {
+                    if (e.target.value === 'Other') {
+                      setTypeIsOther(true)
+                      setDraft(d => ({ ...d, appointment_type: '' }))
+                    } else {
+                      setTypeIsOther(false)
+                      setOtherTypeText('')
+                      setDraft(d => ({ ...d, appointment_type: e.target.value }))
+                    }
+                  }}
+                >
+                  <option value="">Select type…</option>
+                  {APPT_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+                {typeIsOther && (
+                  <input
+                    className="input mt-1.5"
+                    placeholder="Describe the appointment type…"
+                    value={otherTypeText}
+                    onChange={e => setOtherTypeText(e.target.value)}
+                  />
+                )}
+              </div>
+              <div>
+                <label className="label">Date &amp; Time</label>
+                <input
+                  type="datetime-local"
+                  className="input mt-1"
+                  value={draft.appointment_date ? draft.appointment_date.slice(0, 16) : ''}
+                  onChange={e => setDraft(d => ({ ...d, appointment_date: e.target.value }))}
+                />
+              </div>
+              <div>
+                <label className="label">Provider</label>
+                <input
+                  className="input mt-1"
+                  placeholder="Provider name"
+                  value={draft.provider || ''}
+                  onChange={e => setDraft(d => ({ ...d, provider: e.target.value }))}
+                />
+              </div>
+              <div>
+                <label className="label">Location</label>
+                <input
+                  className="input mt-1"
+                  placeholder="Location"
+                  value={draft.location || ''}
+                  onChange={e => setDraft(d => ({ ...d, location: e.target.value }))}
+                />
+              </div>
+              <div>
+                <label className="label">Notes</label>
+                <textarea
+                  className="input mt-1 resize-none"
+                  rows={3}
+                  placeholder="Additional notes…"
+                  value={draft.notes || ''}
+                  onChange={e => setDraft(d => ({ ...d, notes: e.target.value }))}
+                />
+              </div>
+            </div>
+
+            {/* Edit/New footer */}
+            <div className="flex gap-2.5 px-7 py-4 border-t border-gray-100 flex-shrink-0">
+              <button
+                onClick={() => isNew ? onClose() : setMode('view')}
+                className="btn-ghost flex-1 py-2 text-sm"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSave}
+                disabled={saving || !draft.title?.trim() || !draft.appointment_date}
+                className="btn-primary flex-1 py-2 text-sm disabled:opacity-50"
+              >
+                {saving ? 'Saving…' : (isNew ? 'Add Appointment' : 'Save Changes')}
+              </button>
+            </div>
+          </>
         )}
       </div>
     </div>
