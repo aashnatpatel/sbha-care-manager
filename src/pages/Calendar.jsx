@@ -212,7 +212,7 @@ export default function CalendarPage() {
                 <ChevronRight size={18} />
               </button>
             </div>
-            <h1 className="font-heading text-xl sm:text-2xl font-semibold text-gray-800">{headerTitle}</h1>
+            <h1 className="font-heading text-2xl sm:text-2xl font-semibold text-gray-800">{headerTitle}</h1>
           </div>
           <button
             onClick={() => setCurrentDate(new Date())}
@@ -232,7 +232,7 @@ export default function CalendarPage() {
                 <button
                   key={val}
                   onClick={() => setColorMode(val)}
-                  className={`px-2.5 sm:px-3 py-1.5 rounded-lg font-body text-xs font-semibold transition-all min-h-[36px] ${
+                  className={`px-2 sm:px-3 py-1 sm:py-1.5 rounded-lg font-body text-[11px] sm:text-xs font-semibold transition-all min-h-[32px] sm:min-h-[36px] ${
                     colorMode === val
                       ? 'bg-white text-primary shadow-sm border border-gray-100'
                       : 'text-gray-500 hover:text-gray-700'
@@ -249,7 +249,7 @@ export default function CalendarPage() {
                 <button
                   key={v}
                   onClick={() => setView(v)}
-                  className={`px-2.5 sm:px-3 py-1.5 rounded-lg font-body text-xs font-semibold capitalize transition-all min-h-[36px] ${
+                  className={`px-2 sm:px-3 py-1 sm:py-1.5 rounded-lg font-body text-[11px] sm:text-xs font-semibold capitalize transition-all min-h-[32px] sm:min-h-[36px] ${
                     view === v
                       ? 'bg-white text-primary shadow-sm border border-gray-100'
                       : 'text-gray-500 hover:text-gray-700'
@@ -616,27 +616,25 @@ function ApptDetailModal({ appt, onClose, onUpdate, onDelete, onViewPatient, sav
               )}
             </div>
 
-            <div className="flex items-center gap-3 px-7 py-5 border-t border-gray-100 flex-shrink-0">
-              <div className="flex-1">
-                {appt.patient_id && (
-                  <button
-                    onClick={() => onViewPatient(appt.patient_id)}
-                    className="btn-primary flex items-center gap-2 py-2.5 px-5 text-sm"
-                  >
-                    <ExternalLink size={13} />
-                    View Patient Profile
-                  </button>
-                )}
-              </div>
+            <div className="flex flex-col sm:flex-row sm:items-center gap-2 px-7 pt-4 pb-8 sm:py-5 border-t border-gray-100 flex-shrink-0">
+              {appt.patient_id && (
+                <button
+                  onClick={() => onViewPatient(appt.patient_id)}
+                  className="btn-primary flex items-center justify-center gap-2 py-2.5 px-5 text-sm w-full sm:w-auto sm:flex-1"
+                >
+                  <ExternalLink size={13} />
+                  View Patient Profile
+                </button>
+              )}
               <button
                 onClick={() => generateICS(appt)}
-                className="btn-ghost flex items-center gap-2 py-2.5 px-5 text-sm flex-shrink-0"
+                className="btn-ghost flex items-center justify-center gap-2 py-2.5 px-5 text-sm w-full sm:w-auto"
                 title="Sync to Calendar"
               >
                 <CalendarPlus size={13} />
                 Sync to Calendar
               </button>
-              <button onClick={onClose} className="btn-ghost py-2.5 px-5 text-sm flex-shrink-0">Close</button>
+              <button onClick={onClose} className="btn-ghost py-2.5 px-5 text-sm w-full sm:w-auto">Close</button>
             </div>
           </>
         ) : (
