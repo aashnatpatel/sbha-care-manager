@@ -63,6 +63,7 @@ export default function Dashboard() {
   const [pinnedDocs, setPinnedDocs] = useState([])
   const [viewedAppts, setViewedAppts] = useState([])
   const [loading, setLoading] = useState(true)
+  const [showPinnedDocs, setShowPinnedDocs] = useState(false)
   const [showArchived, setShowArchived] = useState(false)
   const [showDeleted, setShowDeleted] = useState(false)
   const [confirmPermDelete, setConfirmPermDelete] = useState(null) // patient object | null
@@ -268,13 +269,22 @@ export default function Dashboard() {
 
       {/* Pinned Documents */}
       <section className="mb-6 md:mb-8">
-        <div className="flex items-center gap-2 mb-3">
+        <button
+          onClick={() => setShowPinnedDocs(v => !v)}
+          className="flex items-center gap-2 mb-3 group"
+        >
+          {showPinnedDocs
+            ? <ChevronDown size={15} className="text-gray-400" />
+            : <ChevronRight size={15} className="text-gray-400" />}
           <Pin size={15} className="text-gray-500" />
           <h2 className="font-body text-sm font-semibold text-gray-500 uppercase tracking-wider">
             Pinned Documents
           </h2>
-        </div>
-        {pinnedDocs.length === 0 ? (
+          {pinnedDocs.length > 0 && (
+            <span className="font-body text-xs text-gray-400">({pinnedDocs.length})</span>
+          )}
+        </button>
+        {showPinnedDocs && pinnedDocs.length === 0 ? (
           <div
             className="card border-2 border-dashed border-gray-100 flex items-center gap-3 cursor-pointer hover:border-primary/30 transition-colors"
             onClick={() => navigate('/documents')}
@@ -284,7 +294,7 @@ export default function Dashboard() {
               Pin frequently accessed documents here — contracts, templates, and more
             </span>
           </div>
-        ) : (
+        ) : showPinnedDocs ? (
           <div className="flex gap-3 overflow-x-auto pb-1 sm:flex-wrap sm:pb-0">
             {pinnedDocs.map((doc) => (
               <div
@@ -311,7 +321,7 @@ export default function Dashboard() {
               <span className="font-body text-sm text-gray-400">Add document</span>
             </div>
           </div>
-        )}
+        ) : null}
       </section>
 
       {/* Schedule */}
