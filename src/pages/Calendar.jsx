@@ -194,24 +194,26 @@ export default function CalendarPage() {
     <div className="p-4 sm:p-6 md:p-8 max-w-7xl">
 
       {/* ── Header ── */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4 sm:mb-6">
-        {/* Left: nav + title */}
-        <div className="flex items-center gap-2 sm:gap-3">
-          <div className="flex items-center gap-0.5">
-            <button
-              onClick={navigatePrev}
-              className="w-9 h-9 flex items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-700 transition-colors"
-            >
-              <ChevronLeft size={18} />
-            </button>
-            <button
-              onClick={navigateNext}
-              className="w-9 h-9 flex items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-700 transition-colors"
-            >
-              <ChevronRight size={18} />
-            </button>
+      <div className="mb-4 sm:mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-3">
+        {/* Row 1 on mobile / Left on desktop: nav arrows + month/year + Today */}
+        <div className="flex items-center justify-between sm:justify-start gap-2 sm:gap-3">
+          <div className="flex items-center gap-1 sm:gap-2">
+            <div className="flex items-center gap-0.5">
+              <button
+                onClick={navigatePrev}
+                className="w-9 h-9 flex items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-700 transition-colors"
+              >
+                <ChevronLeft size={18} />
+              </button>
+              <button
+                onClick={navigateNext}
+                className="w-9 h-9 flex items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-700 transition-colors"
+              >
+                <ChevronRight size={18} />
+              </button>
+            </div>
+            <h1 className="font-heading text-xl sm:text-2xl font-semibold text-gray-800">{headerTitle}</h1>
           </div>
-          <h1 className="font-heading text-xl sm:text-2xl font-semibold text-gray-800">{headerTitle}</h1>
           <button
             onClick={() => setCurrentDate(new Date())}
             className="px-3 py-1.5 rounded-lg border border-gray-200 font-body text-xs font-semibold text-gray-500 hover:bg-gray-50 hover:text-gray-800 transition-colors min-h-[36px]"
@@ -220,45 +222,49 @@ export default function CalendarPage() {
           </button>
         </div>
 
-        {/* Right: controls */}
-        <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
-          {/* Color mode toggle */}
-          <div className="flex rounded-xl border border-gray-200 bg-gray-50 p-0.5">
-            {[{ val: 'type', label: 'By Type' }, { val: 'patient', label: 'By Patient' }].map(({ val, label }) => (
-              <button
-                key={val}
-                onClick={() => setColorMode(val)}
-                className={`px-2.5 sm:px-3 py-1.5 rounded-lg font-body text-xs font-semibold transition-all min-h-[36px] ${
-                  colorMode === val
-                    ? 'bg-white text-primary shadow-sm border border-gray-100'
-                    : 'text-gray-500 hover:text-gray-700'
-                }`}
-              >
-                {label}
-              </button>
-            ))}
+        {/* Row 2+3 on mobile / Right on desktop: toggles + Add Event */}
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+          {/* Row 2 on mobile: By Type/Patient + Month/Week toggles (centered) */}
+          <div className="flex items-center justify-center sm:justify-start gap-2">
+            {/* Color mode toggle */}
+            <div className="flex rounded-xl border border-gray-200 bg-gray-50 p-0.5">
+              {[{ val: 'type', label: 'By Type' }, { val: 'patient', label: 'By Patient' }].map(({ val, label }) => (
+                <button
+                  key={val}
+                  onClick={() => setColorMode(val)}
+                  className={`px-2.5 sm:px-3 py-1.5 rounded-lg font-body text-xs font-semibold transition-all min-h-[36px] ${
+                    colorMode === val
+                      ? 'bg-white text-primary shadow-sm border border-gray-100'
+                      : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            {/* Month / Week toggle */}
+            <div className="flex rounded-xl border border-gray-200 bg-gray-50 p-0.5">
+              {['month', 'week'].map(v => (
+                <button
+                  key={v}
+                  onClick={() => setView(v)}
+                  className={`px-2.5 sm:px-3 py-1.5 rounded-lg font-body text-xs font-semibold capitalize transition-all min-h-[36px] ${
+                    view === v
+                      ? 'bg-white text-primary shadow-sm border border-gray-100'
+                      : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  {v}
+                </button>
+              ))}
+            </div>
           </div>
 
-          {/* Month / Week toggle */}
-          <div className="flex rounded-xl border border-gray-200 bg-gray-50 p-0.5">
-            {['month', 'week'].map(v => (
-              <button
-                key={v}
-                onClick={() => setView(v)}
-                className={`px-2.5 sm:px-3 py-1.5 rounded-lg font-body text-xs font-semibold capitalize transition-all min-h-[36px] ${
-                  view === v
-                    ? 'bg-white text-primary shadow-sm border border-gray-100'
-                    : 'text-gray-500 hover:text-gray-700'
-                }`}
-              >
-                {v}
-              </button>
-            ))}
-          </div>
-
+          {/* Row 3 on mobile: Add Event (full width) */}
           <button
             onClick={() => setShowAddModal(true)}
-            className="btn-primary flex items-center gap-2 px-3 sm:px-4 py-2 text-sm min-h-[36px]"
+            className="btn-primary w-full sm:w-auto flex items-center justify-center gap-2 px-3 sm:px-4 py-2 text-sm min-h-[36px]"
           >
             <Plus size={15} />
             Add Event
@@ -530,7 +536,7 @@ function ApptDetailModal({ appt, onClose, onUpdate, onDelete, onViewPatient, sav
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
+      className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center p-0 sm:p-4"
       onClick={e => { if (e.target === e.currentTarget) onClose() }}
     >
       <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" />
@@ -568,7 +574,7 @@ function ApptDetailModal({ appt, onClose, onUpdate, onDelete, onViewPatient, sav
               </div>
             </div>
 
-            <div className="px-7 pb-5 space-y-4 border-t border-gray-100 pt-5 overflow-y-auto flex-1">
+            <div className="px-7 pt-5 pb-20 sm:pb-5 space-y-4 border-t border-gray-100 overflow-y-auto flex-1">
               {appt.appointment_date && (
                 <div>
                   <p className="label">Date &amp; Time</p>
@@ -642,7 +648,7 @@ function ApptDetailModal({ appt, onClose, onUpdate, onDelete, onViewPatient, sav
               </button>
             </div>
 
-            <div className="px-7 py-5 space-y-3.5 overflow-y-auto flex-1">
+            <div className="px-7 pt-5 pb-20 sm:pb-5 space-y-3.5 overflow-y-auto flex-1">
               <div>
                 <label className="label">Title *</label>
                 <input className="input mt-1" value={draft.title || ''} autoFocus
@@ -733,7 +739,7 @@ function AddEventModal({ onClose, onSave, saving, defaultDate, patients }) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
+      className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center p-0 sm:p-4"
       onClick={e => { if (e.target === e.currentTarget) onClose() }}
     >
       <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" />
@@ -746,7 +752,7 @@ function AddEventModal({ onClose, onSave, saving, defaultDate, patients }) {
           </button>
         </div>
 
-        <div className="px-6 py-5 space-y-3 overflow-y-auto flex-1">
+        <div className="px-6 pt-5 pb-20 sm:pb-5 space-y-3 overflow-y-auto flex-1">
           <div>
             <label className="label">Title *</label>
             <input className="input" placeholder="Event title" value={draft.title} autoFocus

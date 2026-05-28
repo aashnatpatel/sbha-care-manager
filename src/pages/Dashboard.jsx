@@ -392,7 +392,7 @@ export default function Dashboard() {
                     {appts.map((appt) => (
                       <div
                         key={appt.id}
-                        className="card flex items-center gap-4 py-3.5 cursor-pointer hover:shadow-card-hover transition-shadow"
+                        className="card rounded-xl flex items-center gap-4 py-3.5 cursor-pointer hover:shadow-card-hover transition-shadow"
                         onClick={() => setApptModal(appt)}
                       >
                         <div className="flex flex-col items-center w-14 flex-shrink-0">
@@ -889,7 +889,7 @@ export default function Dashboard() {
 
       {/* Permanent Delete Confirmation */}
       {confirmPermDelete && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
+        <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center p-0 sm:p-4">
           <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" onClick={() => setConfirmPermDelete(null)} />
           <div className="relative bg-white rounded-t-2xl sm:rounded-2xl shadow-xl border border-gray-100 p-6 w-full sm:max-w-sm">
             <h3 className="font-heading text-xl text-gray-800 mb-2">Permanently Delete?</h3>
@@ -1012,7 +1012,7 @@ function ApptDetailModal({ appt, onClose, onUpdate, onDelete, onViewPatient, sav
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
+      className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center p-0 sm:p-4"
       onClick={e => { if (e.target === e.currentTarget) onClose() }}
     >
       <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" />
@@ -1058,7 +1058,7 @@ function ApptDetailModal({ appt, onClose, onUpdate, onDelete, onViewPatient, sav
             </div>
 
             {/* View content */}
-            <div className="px-7 pb-5 space-y-4 border-t border-gray-100 pt-5 overflow-y-auto">
+            <div className="px-7 pt-5 pb-20 sm:pb-5 space-y-4 border-t border-gray-100 overflow-y-auto flex-1">
               {appt.appointment_date && (
                 <div>
                   <p className="label">Date &amp; Time</p>
@@ -1142,7 +1142,7 @@ function ApptDetailModal({ appt, onClose, onUpdate, onDelete, onViewPatient, sav
             </div>
 
             {/* Edit fields */}
-            <div className="px-7 py-5 space-y-3.5 overflow-y-auto max-h-[60vh]">
+            <div className="px-7 pt-5 pb-20 sm:pb-5 space-y-3.5 overflow-y-auto flex-1">
               <div>
                 <label className="label">Title *</label>
                 <input
@@ -1276,7 +1276,7 @@ function AddEventModal({ onClose, onSave, saving, defaultDate, patients }) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
+      className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center p-0 sm:p-4"
       onClick={e => { if (e.target === e.currentTarget) onClose() }}
     >
       <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" />
@@ -1289,7 +1289,7 @@ function AddEventModal({ onClose, onSave, saving, defaultDate, patients }) {
           </button>
         </div>
 
-        <div className="px-6 py-5 space-y-3 overflow-y-auto max-h-[70vh]">
+        <div className="px-6 pt-5 pb-20 sm:pb-5 space-y-3 overflow-y-auto flex-1">
           <div>
             <label className="label">Title *</label>
             <input

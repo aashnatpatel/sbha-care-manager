@@ -1098,18 +1098,18 @@ export default function PatientProfile() {
           </div>
           </div>{/* end flex items-start gap-5 */}
 
-          <div className="flex items-center gap-2 sm:gap-3 flex-wrap sm:flex-nowrap sm:flex-shrink-0">
+          <div className="flex items-center gap-1.5 sm:gap-3 flex-nowrap flex-shrink-0">
             <button
               onClick={openIntakePanel}
-              className="flex items-center gap-2 px-3 py-2 rounded-xl font-body text-sm font-semibold shadow-sm transition-all bg-primary text-white hover:bg-primary/90 min-h-[44px]"
+              className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-xl font-body text-xs sm:text-sm font-semibold shadow-sm transition-all bg-primary text-white hover:bg-primary/90 min-h-[36px] sm:min-h-[44px]"
             >
-              <ClipboardList size={15} />
-              Intake &amp; Background
+              <ClipboardList size={14} />
+              <span>Intake &amp; Background</span>
             </button>
             <button
               onClick={generateAISummary}
               disabled={aiLoading}
-              className="flex items-center gap-2 px-3 py-2 rounded-xl font-body text-sm font-semibold shadow-sm transition-all bg-primary text-white hover:bg-primary/90 disabled:opacity-60 min-h-[44px]"
+              className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-xl font-body text-xs sm:text-sm font-semibold shadow-sm transition-all bg-primary text-white hover:bg-primary/90 disabled:opacity-60 min-h-[36px] sm:min-h-[44px]"
             >
               <Sparkles size={15} />
               {aiLoading ? 'Generating…' : 'AI Briefing'}
@@ -1118,7 +1118,7 @@ export default function PatientProfile() {
             <div className="relative" ref={actionsMenuRef}>
               <button
                 onClick={() => setShowActionsMenu(v => !v)}
-                className="flex items-center justify-center w-10 h-10 rounded-xl border border-gray-200 text-gray-500 hover:bg-gray-50 hover:border-gray-300 transition-all"
+                className="flex items-center justify-center w-8 h-8 sm:w-10 sm:h-10 rounded-xl border border-gray-200 text-gray-500 hover:bg-gray-50 hover:border-gray-300 transition-all"
                 title="More actions"
               >
                 <MoreVertical size={16} />
@@ -1440,7 +1440,7 @@ export default function PatientProfile() {
 
             {/* Rename Modal */}
             {renamingDoc && (
-              <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
+              <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center p-0 sm:p-4">
                 <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" onClick={() => setRenamingDoc(null)} />
                 <div className="relative bg-white rounded-t-2xl sm:rounded-2xl shadow-xl p-6 w-full sm:max-w-sm">
                   <h3 className="font-heading text-xl text-gray-800 mb-4">Rename Document</h3>
@@ -1461,7 +1461,7 @@ export default function PatientProfile() {
 
             {/* Reassign Modal */}
             {reassigningDoc && (
-              <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
+              <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center p-0 sm:p-4">
                 <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" onClick={() => setReassigningDoc(null)} />
                 <div className="relative bg-white rounded-t-2xl sm:rounded-2xl shadow-xl p-6 w-full sm:max-w-sm">
                   <h3 className="font-heading text-xl text-gray-800 mb-1">Reassign Document</h3>
@@ -2554,7 +2554,7 @@ export default function PatientProfile() {
 
       {/* ── AVATAR CROP MODAL ── */}
       {cropModal && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
+        <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center p-0 sm:p-4">
           <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setCropModal(null)} />
           <div className="relative bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl p-6 w-full sm:max-w-sm flex flex-col items-center gap-5">
             <h3 className="font-heading text-xl text-gray-800 self-start">Crop Photo</h3>
@@ -2592,7 +2592,7 @@ export default function PatientProfile() {
 
       {/* ── DELETE PATIENT CONFIRMATION ── */}
       {showDeleteConfirm && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
+        <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center p-0 sm:p-4">
           <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" onClick={() => setShowDeleteConfirm(false)} />
           <div className="relative bg-white rounded-t-2xl sm:rounded-2xl shadow-xl border border-gray-100 p-6 w-full sm:max-w-sm">
             <h3 className="font-heading text-xl text-gray-800 mb-2">Delete Patient?</h3>
@@ -3153,7 +3153,7 @@ function AppointmentModal({ modal, onClose, onSave, onDelete, saving }) {
     : null
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+    <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
       <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" />
       <div className="relative bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl w-full sm:max-w-lg flex flex-col overflow-hidden max-h-[95vh] sm:max-h-none">
 
@@ -3370,16 +3370,16 @@ function InsuranceModal({ modal, onClose, onSave, saving }) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+    <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
       <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" />
       <div className="relative bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl w-full sm:max-w-md flex flex-col overflow-hidden max-h-[95vh] sm:max-h-none">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 flex-shrink-0">
           <h2 className="font-heading text-xl font-semibold text-gray-800">
             {modal.mode === 'new' ? 'Add Insurance' : 'Edit Insurance'}
           </h2>
           <button onClick={onClose} className="p-1.5 text-gray-400 hover:text-gray-600 transition-colors"><X size={18} /></button>
         </div>
-        <div className="px-6 py-5 space-y-4">
+        <div className="px-6 pt-5 pb-20 sm:pb-5 space-y-4 overflow-y-auto flex-1">
           <div>
             <label className="label">Insurance Type</label>
             <select
@@ -3438,7 +3438,7 @@ function InsuranceModal({ modal, onClose, onSave, saving }) {
             </button>
           </div>
         </div>
-        <div className="flex gap-2 px-6 py-4 border-t border-gray-100">
+        <div className="flex gap-2 px-6 pt-4 pb-6 sm:py-4 border-t border-gray-100 flex-shrink-0">
           <button onClick={onClose} className="btn-ghost flex-1 py-2 text-sm">Cancel</button>
           <button onClick={handleSave} disabled={saving} className="btn-primary flex-1 py-2 text-sm disabled:opacity-50">
             {saving ? 'Saving…' : 'Save'}
@@ -3700,7 +3700,7 @@ function NoteModal({ modal, patientId, patientName, onClose, onSave, onUpdate, o
   return (
     <>
     <div
-      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
+      className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center p-0 sm:p-4"
       onClick={e => { if (e.target === e.currentTarget) onClose() }}
     >
       <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" />
@@ -3769,7 +3769,7 @@ function NoteModal({ modal, patientId, patientName, onClose, onSave, onUpdate, o
         )}
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto px-7 py-6">
+        <div className="flex-1 overflow-y-auto px-7 pt-6 pb-24 sm:pb-6">
           {mode === 'view' ? (
             <div>
               <style>{`
@@ -3908,7 +3908,7 @@ function NoteModal({ modal, patientId, patientName, onClose, onSave, onUpdate, o
 
         {/* Footer — edit mode only */}
         {mode === 'edit' && (
-          <div className="flex items-center justify-end gap-2 px-7 py-4 border-t border-gray-100 flex-shrink-0">
+          <div className="flex items-center justify-end gap-2 px-7 pt-4 pb-8 sm:py-4 border-t border-gray-100 flex-shrink-0">
             <button
               onClick={() => isNew ? onClose() : setMode('view')}
               className="btn-ghost py-2 px-4 text-sm"
@@ -3993,7 +3993,7 @@ function NoteModal({ modal, patientId, patientName, onClose, onSave, onUpdate, o
 function DocPreviewModal({ doc, url, onClose, onDownload }) {
   const category = getDocFileCategory(doc)
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-4 bg-black/50" onClick={onClose}>
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-0 sm:p-4 bg-black/50" onClick={onClose}>
       <div
         className="bg-white sm:rounded-2xl shadow-2xl flex flex-col w-full sm:max-w-4xl"
         style={{ height: '100dvh' }}

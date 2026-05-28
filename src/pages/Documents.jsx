@@ -214,7 +214,7 @@ export default function Documents() {
 
       {/* ── Rename Modal ── */}
       {renamingDoc && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
+        <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center p-0 sm:p-4">
           <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" onClick={() => setRenamingDoc(null)} />
           <div className="relative bg-white rounded-t-2xl sm:rounded-2xl shadow-xl p-6 w-full sm:max-w-sm">
             <h3 className="font-heading text-xl text-gray-800 mb-4">Rename Document</h3>
@@ -235,7 +235,7 @@ export default function Documents() {
 
       {/* ── Assign Modal ── */}
       {assigningDoc && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
+        <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center p-0 sm:p-4">
           <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" onClick={() => setAssigningDoc(null)} />
           <div className="relative bg-white rounded-t-2xl sm:rounded-2xl shadow-xl p-6 w-full sm:max-w-sm">
             <h3 className="font-heading text-xl text-gray-800 mb-1">
