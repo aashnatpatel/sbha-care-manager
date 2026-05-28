@@ -570,7 +570,7 @@ export default function Dashboard() {
                   <div
                     key={patient.id}
                     onClick={() => navigate(`/patients/${patient.id}`)}
-                    className="group cursor-pointer rounded-2xl bg-white border border-gray-100 border-l-[3px] border-l-transparent shadow-sm hover:shadow-card-hover opacity-70 hover:opacity-100 transition-all duration-200"
+                    className="group cursor-pointer rounded-2xl bg-white border border-gray-100 border-l-[3px] border-l-transparent hover:border-l-mauve shadow-sm hover:shadow-card-hover opacity-70 hover:opacity-100 transition-all duration-200"
                   >
                     <div className="p-5">
                       <div className="flex items-start justify-between gap-2 mb-2">
@@ -645,11 +645,11 @@ export default function Dashboard() {
               {deletedPatients.map((patient) => (
                 <div
                   key={patient.id}
-                  className="rounded-2xl bg-white border border-gray-100 border-l-[3px] border-l-gray-200 shadow-sm opacity-60 hover:opacity-100 transition-opacity duration-200"
+                  className="group rounded-2xl bg-white border border-gray-100 border-l-[3px] border-l-transparent hover:border-l-mauve shadow-sm hover:shadow-card-hover opacity-60 hover:opacity-100 transition-all duration-200"
                 >
                   <div className="p-5">
                     <div className="flex items-start justify-between gap-2 mb-2">
-                      <h3 className="font-heading text-xl font-semibold text-gray-500 leading-tight">
+                      <h3 className="font-heading text-xl font-semibold text-gray-500 group-hover:text-primary transition-colors leading-tight">
                         {patient.first_name} {patient.last_name}
                       </h3>
                       <span className="flex-shrink-0 inline-flex items-center px-2 py-0.5 rounded-full bg-gray-100 text-gray-400 font-body text-[10px] font-semibold uppercase tracking-wide border border-gray-200">
