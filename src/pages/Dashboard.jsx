@@ -3,12 +3,19 @@ import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { format, isToday, parseISO, isAfter, startOfDay, addDays, isSameDay } from 'date-fns'
 import {
-  Pin, Calendar, FileText, Plus, Clock,
-  ChevronRight, ChevronLeft, Activity, ChevronDown, ChevronUp,
+  Pin, Calendar, FileText, File, Image, Plus, Clock,
+  ChevronRight, ChevronLeft, Users, ChevronDown, ChevronUp,
   Search, User, X, Edit3, Trash2, ExternalLink, CalendarPlus,
 } from 'lucide-react'
 
 const APPT_TYPES = ['Doctor Appointment', 'Patient Meeting', 'Family Meeting', 'SBHA General Event', 'Other']
+
+function getDocIcon(fileType) {
+  if (!fileType) return <File size={14} className="text-gray-500" />
+  if (fileType.startsWith('image/')) return <Image size={14} className="text-primary" />
+  if (fileType === 'application/pdf') return <FileText size={14} className="text-mauve" />
+  return <File size={14} className="text-gray-500" />
+}
 
 // Parse appointment datetime as local time — strips tz offset so stored times display as entered
 function parseApptDateLocal(dateStr) {
@@ -49,12 +56,12 @@ const APPT_SELECT = 'id, title, appointment_date, appointment_type, patient_id, 
 export default function Dashboard() {
   const navigate = useNavigate()
   const [patients, setPatients] = useState([])
-  const [inactivePatients, setInactivePatients] = useState([])
+  const [archivedPatients, setInactivePatients] = useState([])
   const [deletedPatients, setDeletedPatients] = useState([])
   const [pinnedDocs, setPinnedDocs] = useState([])
   const [viewedAppts, setViewedAppts] = useState([])
   const [loading, setLoading] = useState(true)
-  const [showInactive, setShowInactive] = useState(false)
+  const [showArchived, setShowArchived] = useState(false)
   const [showDeleted, setShowDeleted] = useState(false)
   const [confirmPermDelete, setConfirmPermDelete] = useState(null) // patient object | null
   const [searchQuery, setSearchQuery] = useState('')
@@ -190,6 +197,12 @@ export default function Dashboard() {
     setEditingDesc(null)
   }
 
+  async function reactivatePatient(patient) {
+    await supabase.from('patients').update({ status: 'active' }).eq('id', patient.id)
+    setInactivePatients(prev => prev.filter(p => p.id !== patient.id))
+    setPatients(prev => [...prev, { ...patient, status: 'active' }])
+  }
+
   async function restorePatient(patient) {
     await supabase.from('patients').update({ deleted_at: null }).eq('id', patient.id)
     setDeletedPatients(prev => prev.filter(p => p.id !== patient.id))
@@ -248,7 +261,7 @@ export default function Dashboard() {
       {/* Pinned Documents */}
       <section className="mb-8">
         <div className="flex items-center gap-2 mb-3">
-          <Pin size={15} className="text-mauve" />
+          <Pin size={15} className="text-gray-500" />
           <h2 className="font-body text-sm font-semibold text-gray-500 uppercase tracking-wider">
             Pinned Documents
           </h2>
@@ -271,8 +284,8 @@ export default function Dashboard() {
                 className="card flex items-center gap-3 cursor-pointer hover:shadow-card-hover transition-shadow py-3 px-4"
                 onClick={() => navigate('/documents')}
               >
-                <div className="w-8 h-8 rounded-lg bg-mauve-light flex items-center justify-center flex-shrink-0">
-                  <FileText size={14} className="text-mauve" />
+                <div className="w-8 h-8 rounded-lg bg-gray-50 flex items-center justify-center flex-shrink-0">
+                  {getDocIcon(doc.file_type)}
                 </div>
                 <div>
                   <p className="font-body text-sm font-medium text-gray-700">{doc.name}</p>
@@ -401,7 +414,7 @@ export default function Dashboard() {
       {/* Active Patients */}
       <section>
         <div className="flex items-center gap-2 mb-3">
-          <Activity size={15} className="text-primary" />
+          <Users size={15} className="text-gray-500" />
           <h2 className="font-body text-sm font-semibold text-gray-500 uppercase tracking-wider">
             Active Patients
           </h2>
@@ -532,25 +545,25 @@ export default function Dashboard() {
         )}
       </section>
 
-      {/* Inactive Patients */}
-      {inactivePatients.length > 0 && (
+      {/* Archived Patients */}
+      {archivedPatients.length > 0 && (
         <section className="mt-8">
           <button
-            onClick={() => setShowInactive(p => !p)}
+            onClick={() => setShowArchived(p => !p)}
             className="flex items-center gap-2 mb-3 group"
           >
-            {showInactive
+            {showArchived
               ? <ChevronUp size={15} className="text-gray-400" />
               : <ChevronDown size={15} className="text-gray-400" />}
             <h2 className="font-body text-sm font-semibold text-gray-400 uppercase tracking-wider group-hover:text-gray-600 transition-colors">
-              Inactive Patients
+              Archived Patients
             </h2>
-            <span className="tag bg-gray-100 text-gray-400 ml-1">{inactivePatients.length}</span>
+            <span className="tag bg-gray-100 text-gray-400 ml-1">{archivedPatients.length}</span>
           </button>
 
-          {showInactive && (
+          {showArchived && (
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-              {inactivePatients.map((patient) => {
+              {archivedPatients.map((patient) => {
                 const lastActivity = getMostRecentActivity(patient)
                 const nextAppt    = getNextAppointment(patient)
                 return (
@@ -565,7 +578,7 @@ export default function Dashboard() {
                           {patient.first_name} {patient.last_name}
                         </h3>
                         <span className="flex-shrink-0 inline-flex items-center px-2 py-0.5 rounded-full bg-gray-100 text-gray-400 font-body text-[10px] font-semibold uppercase tracking-wide border border-gray-200">
-                          Inactive
+                          Archived
                         </span>
                       </div>
 
@@ -595,7 +608,12 @@ export default function Dashboard() {
                         ) : (
                           <span className="font-body text-[11px] text-gray-300 italic">No activity</span>
                         )}
-                        <ChevronRight size={14} className="text-gray-300 group-hover:text-primary transition-colors" />
+                        <button
+                          onClick={e => { e.stopPropagation(); reactivatePatient(patient) }}
+                          className="px-2.5 py-1 rounded-lg border border-gray-200 text-gray-500 bg-white font-body text-[11px] font-semibold hover:bg-primary-light hover:text-primary hover:border-primary/30 transition-all"
+                        >
+                          Unarchive
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -627,14 +645,14 @@ export default function Dashboard() {
               {deletedPatients.map((patient) => (
                 <div
                   key={patient.id}
-                  className="rounded-2xl bg-white border border-gray-100 border-l-[3px] border-l-red-200 shadow-sm opacity-60"
+                  className="rounded-2xl bg-white border border-gray-100 border-l-[3px] border-l-gray-200 shadow-sm opacity-60 hover:opacity-100 transition-opacity duration-200"
                 >
                   <div className="p-5">
                     <div className="flex items-start justify-between gap-2 mb-2">
                       <h3 className="font-heading text-xl font-semibold text-gray-500 leading-tight">
                         {patient.first_name} {patient.last_name}
                       </h3>
-                      <span className="flex-shrink-0 inline-flex items-center px-2 py-0.5 rounded-full bg-red-50 text-red-400 font-body text-[10px] font-semibold uppercase tracking-wide border border-red-100">
+                      <span className="flex-shrink-0 inline-flex items-center px-2 py-0.5 rounded-full bg-gray-100 text-gray-400 font-body text-[10px] font-semibold uppercase tracking-wide border border-gray-200">
                         Deleted
                       </span>
                     </div>
@@ -649,13 +667,13 @@ export default function Dashboard() {
                     <div className="flex gap-2">
                       <button
                         onClick={() => restorePatient(patient)}
-                        className="flex-1 px-3 py-1.5 rounded-xl border border-primary/30 text-primary bg-primary-light font-body text-xs font-semibold hover:bg-primary hover:text-white transition-all"
+                        className="flex-1 px-2.5 py-1 rounded-lg border border-gray-200 text-gray-500 bg-white font-body text-[11px] font-semibold hover:bg-primary-light hover:text-primary hover:border-primary/30 transition-all"
                       >
                         Restore
                       </button>
                       <button
                         onClick={() => setConfirmPermDelete(patient)}
-                        className="flex-1 px-3 py-1.5 rounded-xl border border-red-200 text-red-500 bg-red-50 font-body text-xs font-semibold hover:bg-red-500 hover:text-white transition-all"
+                        className="flex-1 px-2.5 py-1 rounded-lg border border-red-200 text-red-500 bg-white font-body text-[11px] font-semibold hover:bg-red-50 hover:border-red-600 hover:text-red-800 transition-all"
                       >
                         Permanently Delete
                       </button>

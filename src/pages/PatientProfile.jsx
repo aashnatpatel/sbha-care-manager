@@ -7,6 +7,7 @@ import {
   Users, Calendar, FileText, Plus, Sparkles, Trash2, Edit3, Clock,
   Shield, X, Check, ChevronDown, ChevronUp, ChevronRight, ChevronLeft, Target, Paperclip,
   Download, List, ListOrdered, ToggleLeft, ToggleRight, Search, CheckCircle, MoreVertical, SlidersHorizontal, ClipboardList, Printer,
+  File, Image,
 } from 'lucide-react'
 import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, LevelFormat } from 'docx'
 import { saveAs } from 'file-saver'
@@ -96,6 +97,12 @@ function badgeBg(type)     { return (NOTE_TYPE_PRINT[type] || NOTE_TYPE_PRINT['O
 function badgeFg(type)     { return (NOTE_TYPE_PRINT[type] || NOTE_TYPE_PRINT['Other']).fg }
 function badgeBorder(type) { return (NOTE_TYPE_PRINT[type] || NOTE_TYPE_PRINT['Other']).border }
 const today = format(new Date(), 'yyyy-MM-dd')
+function getDocIcon(fileType, size = 13) {
+  if (!fileType) return <File size={size} className="text-gray-500 flex-shrink-0" />
+  if (fileType.startsWith('image/')) return <Image size={size} className="text-primary flex-shrink-0" />
+  if (fileType === 'application/pdf') return <FileText size={size} className="text-mauve flex-shrink-0" />
+  return <File size={size} className="text-gray-500 flex-shrink-0" />
+}
 function getDocFileCategory(doc) {
   const mime = (doc.file_type || '').toLowerCase()
   const name = (doc.name || '').toLowerCase()
@@ -453,7 +460,7 @@ export default function PatientProfile() {
   }
 
   async function toggleStatus() {
-    const next = patient.status === 'active' ? 'inactive' : 'active'
+    const next = patient.status === 'active' ? 'archived' : 'active'
     const { data } = await supabase.from('patients').update({ status: next }).eq('id', id).select().single()
     if (data) setPatient(data)
   }
@@ -753,7 +760,7 @@ export default function PatientProfile() {
     .meta-row { display: flex; gap: 16px; align-items: center; margin-bottom: 28px; flex-wrap: wrap; }
     .badge { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; }
     .badge-active { background: #d1fae5; color: #065f46; }
-    .badge-inactive { background: #f3f4f6; color: #6b7280; }
+    .badge-archived { background: #f3f4f6; color: #6b7280; }
     .meta-item { font-size: 11px; color: #6b7280; }
     .meta-item strong { color: #374151; }
     .section { margin-bottom: 22px; }
@@ -780,7 +787,7 @@ export default function PatientProfile() {
 <body>
   <div class="patient-name">${patient.first_name} ${patient.last_name}</div>
   <div class="meta-row">
-    <span class="badge ${patient.status === 'active' ? 'badge-active' : 'badge-inactive'}">${patient.status || 'active'}</span>
+    <span class="badge ${patient.status === 'active' ? 'badge-active' : 'badge-archived'}">${patient.status || 'active'}</span>
     ${age !== null ? `<span class="meta-item"><strong>${age} yrs</strong></span>` : ''}
     ${patient.dob ? `<span class="meta-item">DOB: <strong>${format(parseISO(patient.dob), 'MMMM d, yyyy')}</strong></span>` : ''}
     ${patient.client_since ? `<span class="meta-item">Client since <strong>${format(parseISO(patient.client_since), 'MMMM yyyy')}</strong></span>` : ''}
@@ -1073,7 +1080,7 @@ export default function PatientProfile() {
                     }`}
                   >
                     {patient.status === 'active' ? <ToggleLeft size={15} /> : <ToggleRight size={15} />}
-                    {patient.status === 'active' ? 'Inactivate Patient' : 'Reactivate Patient'}
+                    {patient.status === 'active' ? 'Archive Patient' : 'Unarchive Patient'}
                   </button>
                   <button
                     onClick={() => { setShowDeleteConfirm(true); setShowActionsMenu(false) }}
@@ -1343,7 +1350,7 @@ export default function PatientProfile() {
                 {documents.map(doc => (
                   <div key={doc.id} className="group flex items-center justify-between gap-2 bg-gray-50 rounded-xl px-3 py-2.5 hover:bg-gray-100 transition-colors">
                     <div className="flex items-center gap-2 min-w-0">
-                      <FileText size={13} className="text-primary flex-shrink-0" />
+                      {getDocIcon(doc.file_type, 13)}
                       <div className="min-w-0">
                         <button
                           onClick={() => openDocPreview(doc)}

@@ -15,7 +15,7 @@ CREATE TABLE patients (
   address TEXT,
   phone TEXT,
   email TEXT,
-  status TEXT DEFAULT 'active', -- active, inactive, discharged
+  status TEXT DEFAULT 'active', -- active, archived, discharged
 
   -- Emergency contact
   emergency_contact_name TEXT,

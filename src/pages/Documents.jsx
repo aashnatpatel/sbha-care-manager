@@ -109,10 +109,10 @@ export default function Documents() {
   }
 
   function getFileIcon(fileType) {
-    if (!fileType) return <FileText size={18} className="text-gray-400" />
+    if (!fileType) return <File size={18} className="text-gray-500" />
     if (fileType.startsWith('image/')) return <Image size={18} className="text-primary" />
-    if (fileType === 'application/pdf') return <FileText size={18} className="text-red-500" />
-    return <File size={18} className="text-gray-400" />
+    if (fileType === 'application/pdf') return <FileText size={18} className="text-mauve" />
+    return <File size={18} className="text-gray-500" />
   }
 
   const filtered = docs.filter(d =>
