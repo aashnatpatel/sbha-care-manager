@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
+import AvatarEditor from 'react-avatar-editor'
 import { useParams, useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
@@ -8,7 +9,7 @@ import {
   Users, Calendar, FileText, Plus, Sparkles, Trash2, Edit3, Clock,
   Shield, X, Check, ChevronDown, ChevronUp, ChevronRight, ChevronLeft, Target, Paperclip,
   Download, List, ListOrdered, ToggleLeft, ToggleRight, Search, CheckCircle, MoreVertical, SlidersHorizontal, ClipboardList, Printer,
-  File, Image,
+  File, Image, Camera,
 } from 'lucide-react'
 import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, LevelFormat } from 'docx'
 import { saveAs } from 'file-saver'
@@ -219,6 +220,13 @@ export default function PatientProfile() {
   // Quick note (header)
   const [editingQuickNote, setEditingQuickNote] = useState(false)
   const [quickNoteValue, setQuickNoteValue] = useState('')
+
+  // Avatar
+  const avatarInputRef = useRef(null)
+  const avatarEditorRef = useRef(null)
+  const [uploadingAvatar, setUploadingAvatar] = useState(false)
+  const [cropModal, setCropModal] = useState(null) // null | { file, src }
+  const [cropScale, setCropScale] = useState(1.2)
 
   // Documents
   const [uploadingDoc, setUploadingDoc] = useState(false)
@@ -462,8 +470,11 @@ export default function PatientProfile() {
   }
 
   async function toggleStatus() {
-    const next = patient.status === 'active' ? 'archived' : 'active'
-    const { data } = await supabase.from('patients').update({ status: next }).eq('id', id).select().single()
+    const archiving = patient.status === 'active'
+    const update = archiving
+      ? { status: 'archived', archived_at: new Date().toISOString() }
+      : { status: 'active', archived_at: null }
+    const { data } = await supabase.from('patients').update(update).eq('id', id).select().single()
     if (data) setPatient(data)
   }
 
@@ -693,6 +704,31 @@ export default function PatientProfile() {
     setUploadingDoc(false)
     e.target.value = ''
   }
+
+  function openCropModal(e) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const src = URL.createObjectURL(file)
+    setCropScale(1.2)
+    setCropModal({ file, src })
+    e.target.value = ''
+  }
+
+  const saveCroppedAvatar = useCallback(async () => {
+    if (!avatarEditorRef.current) return
+    setUploadingAvatar(true)
+    setCropModal(null)
+    const canvas = avatarEditorRef.current.getImageScaledToCanvas()
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.92))
+    const path = `avatars/${id}/avatar.jpg`
+    await supabase.storage.from('documents').upload(path, blob, { upsert: true, contentType: 'image/jpeg' })
+    const { data: urlData } = await supabase.storage.from('documents').createSignedUrl(path, 315360000)
+    if (urlData?.signedUrl) {
+      await supabase.from('patients').update({ avatar_url: urlData.signedUrl }).eq('id', id)
+      setPatient(prev => ({ ...prev, avatar_url: urlData.signedUrl }))
+    }
+    setUploadingAvatar(false)
+  }, [id])
 
   async function downloadDocument(doc) {
     const { data } = await supabase.storage.from('documents').createSignedUrl(doc.file_url, 60)
@@ -990,6 +1026,29 @@ export default function PatientProfile() {
       {/* ── HEADER ── */}
       <div className="mb-8">
         <div className="flex items-start justify-between flex-wrap gap-4">
+          <div className="flex items-start gap-5">
+            {/* Avatar */}
+            <input ref={avatarInputRef} type="file" className="hidden" accept="image/jpeg,image/png,image/webp" onChange={openCropModal} />
+            <button
+              onClick={() => avatarInputRef.current?.click()}
+              disabled={uploadingAvatar}
+              className="relative group/avatar w-20 h-20 rounded-full flex-shrink-0 focus:outline-none"
+            >
+              <div className="w-full h-full rounded-full overflow-hidden bg-primary-light flex items-center justify-center">
+                {patient.avatar_url
+                  ? <img src={patient.avatar_url} className="w-full h-full object-cover" alt="" />
+                  : <span className="font-heading text-2xl font-semibold text-primary select-none">
+                      {patient.first_name?.[0]}{patient.last_name?.[0]}
+                    </span>
+                }
+              </div>
+              <div className="absolute inset-0 rounded-full bg-black/30 flex items-center justify-center opacity-0 group-hover/avatar:opacity-100 transition-opacity">
+                {uploadingAvatar
+                  ? <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  : <Camera size={18} className="text-white" />
+                }
+              </div>
+            </button>
           <div>
             <h1 className="font-heading text-4xl font-semibold text-gray-800">
               {patient.first_name} {patient.last_name}
@@ -1037,6 +1096,7 @@ export default function PatientProfile() {
               </p>
             )}
           </div>
+          </div>{/* end flex items-start gap-5 */}
 
           <div className="flex items-center gap-3 flex-wrap">
             <button
@@ -2490,6 +2550,44 @@ export default function PatientProfile() {
           onClose={() => setDocPreview(null)}
           onDownload={() => downloadDocument(docPreview.doc)}
         />
+      )}
+
+      {/* ── AVATAR CROP MODAL ── */}
+      {cropModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setCropModal(null)} />
+          <div className="relative bg-white rounded-2xl shadow-2xl p-6 w-full max-w-sm flex flex-col items-center gap-5">
+            <h3 className="font-heading text-xl text-gray-800 self-start">Crop Photo</h3>
+            <AvatarEditor
+              ref={avatarEditorRef}
+              image={cropModal.src}
+              width={240}
+              height={240}
+              border={24}
+              borderRadius={120}
+              scale={cropScale}
+              rotate={0}
+              color={[255, 255, 255, 0.7]}
+              style={{ borderRadius: '12px' }}
+            />
+            <div className="w-full flex flex-col gap-1.5">
+              <label className="font-body text-xs text-gray-400">Zoom</label>
+              <input
+                type="range"
+                min={1}
+                max={3}
+                step={0.01}
+                value={cropScale}
+                onChange={e => setCropScale(parseFloat(e.target.value))}
+                className="w-full accent-primary"
+              />
+            </div>
+            <div className="flex gap-3 w-full">
+              <button onClick={() => setCropModal(null)} className="btn-ghost flex-1 py-2 text-sm">Cancel</button>
+              <button onClick={saveCroppedAvatar} className="btn-primary flex-1 py-2 text-sm">Save Photo</button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* ── DELETE PATIENT CONFIRMATION ── */}

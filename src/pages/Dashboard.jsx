@@ -58,7 +58,7 @@ export default function Dashboard() {
   const { session } = useAuth()
   const navigate = useNavigate()
   const [patients, setPatients] = useState([])
-  const [archivedPatients, setInactivePatients] = useState([])
+  const [archivedPatients, setArchivedPatients] = useState([])
   const [deletedPatients, setDeletedPatients] = useState([])
   const [pinnedDocs, setPinnedDocs] = useState([])
   const [viewedAppts, setViewedAppts] = useState([])
@@ -109,7 +109,7 @@ export default function Dashboard() {
       return bMs - aMs // descending: most recent first
     })
     setPatients(active)
-    setInactivePatients(nonDeleted.filter(p => p.status !== 'active'))
+    setArchivedPatients(nonDeleted.filter(p => p.status !== 'active'))
     setDeletedPatients(allPatients.filter(p => !!p.deleted_at))
     setPinnedDocs(docsRes.data || [])
     setLoading(false)
@@ -201,9 +201,12 @@ export default function Dashboard() {
   }
 
   async function reactivatePatient(patient) {
-    await supabase.from('patients').update({ status: 'active' }).eq('id', patient.id)
-    setInactivePatients(prev => prev.filter(p => p.id !== patient.id))
-    setPatients(prev => [...prev, { ...patient, status: 'active' }])
+    console.log('[reactivatePatient] Unarchiving patient:', patient.id, patient.first_name, patient.last_name)
+    const { error } = await supabase.from('patients').update({ status: 'active', archived_at: null }).eq('id', patient.id)
+    if (error) { console.error('[reactivatePatient] Error:', error); return }
+    console.log('[reactivatePatient] Success — moving to active list')
+    setArchivedPatients(prev => prev.filter(p => p.id !== patient.id))
+    setPatients(prev => [...prev, { ...patient, status: 'active', archived_at: null }])
   }
 
   async function restorePatient(patient) {
@@ -213,7 +216,7 @@ export default function Dashboard() {
     if (restored.status === 'active') {
       setPatients(prev => [...prev, restored])
     } else {
-      setInactivePatients(prev => [...prev, restored])
+      setArchivedPatients(prev => [...prev, restored])
     }
   }
 
@@ -223,10 +226,11 @@ export default function Dashboard() {
     setConfirmPermDelete(null)
   }
 
-  const filteredPatients = searchQuery.trim()
-    ? patients.filter(p =>
-        `${p.first_name} ${p.last_name}`.toLowerCase().includes(searchQuery.trim().toLowerCase()))
-    : patients
+  const q = searchQuery.trim().toLowerCase()
+  const isSearching = !!q
+  const filteredActive   = q ? patients.filter(p => `${p.first_name} ${p.last_name}`.toLowerCase().includes(q)) : patients
+  const filteredArchived = q ? archivedPatients.filter(p => `${p.first_name} ${p.last_name}`.toLowerCase().includes(q)) : archivedPatients
+  const filteredDeleted  = q ? deletedPatients.filter(p => `${p.first_name} ${p.last_name}`.toLowerCase().includes(q)) : deletedPatients
 
   const isViewingToday = isToday(viewDate)
   const scheduleTitle = isViewingToday
@@ -419,9 +423,9 @@ export default function Dashboard() {
         <div className="flex items-center gap-2 mb-3">
           <Users size={15} className="text-gray-500" />
           <h2 className="font-body text-sm font-semibold text-gray-500 uppercase tracking-wider">
-            Active Patients
+            {isSearching ? 'Search Results' : 'Active Patients'}
           </h2>
-          <span className="tag bg-primary-light text-primary ml-1">{patients.length}</span>
+          {!isSearching && <span className="tag bg-primary-light text-primary ml-1">{patients.length}</span>}
         </div>
 
         <div className="relative mb-5">
@@ -435,7 +439,179 @@ export default function Dashboard() {
           />
         </div>
 
-        {patients.length === 0 ? (
+        {isSearching ? (
+          filteredActive.length === 0 && filteredArchived.length === 0 && filteredDeleted.length === 0 ? (
+            <div className="card text-center py-8">
+              <p className="font-body text-sm text-gray-400">No patients match "{searchQuery}"</p>
+            </div>
+          ) : (
+            <div className="space-y-6">
+              {filteredActive.length > 0 && (
+                <div>
+                  <p className="font-body text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Active ({filteredActive.length})</p>
+                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                    {filteredActive.map((patient) => {
+                      const lastActivity = getMostRecentActivity(patient)
+                      const nextAppt    = getNextAppointment(patient)
+                      return (
+                        <div
+                          key={patient.id}
+                          onClick={() => navigate(`/patients/${patient.id}`)}
+                          className="group cursor-pointer rounded-2xl bg-white border border-gray-100 border-l-[3px] border-l-transparent hover:border-l-mauve shadow-sm hover:shadow-card-hover transition-all duration-200"
+                        >
+                          <div className="p-5">
+                            <div className="flex items-start justify-between gap-2 mb-2">
+                              <div className="flex items-center gap-3 min-w-0">
+                                <div className="w-14 h-14 rounded-full overflow-hidden bg-primary-light flex items-center justify-center flex-shrink-0">
+                                  {patient.avatar_url
+                                    ? <img src={patient.avatar_url} className="w-full h-full object-cover" alt="" />
+                                    : <span className="font-body text-sm font-semibold text-primary select-none">{patient.first_name?.[0]}{patient.last_name?.[0]}</span>
+                                  }
+                                </div>
+                                <h3 className="font-heading text-2xl font-semibold text-gray-800 group-hover:text-primary transition-colors leading-tight">
+                                  {patient.first_name} {patient.last_name}
+                                </h3>
+                              </div>
+                              <span className="flex-shrink-0 inline-flex items-center px-2 py-0.5 rounded-full bg-green-50 text-green-600 font-body text-[10px] font-semibold uppercase tracking-wide border border-green-100">
+                                Active
+                              </span>
+                            </div>
+                            <p className="font-body text-xs text-gray-500 mb-3 truncate">{patient.quick_description || ''}</p>
+                            <div className="flex items-start gap-1.5 mb-3">
+                              <Calendar size={11} className="text-primary mt-0.5 flex-shrink-0" />
+                              {getNextAppointment(patient) ? (
+                                <span className="font-body text-[11px] text-gray-600 truncate">
+                                  {format(parseApptDateLocal(getNextAppointment(patient).appointment_date), 'MMM d')} · {getNextAppointment(patient).title}
+                                </span>
+                              ) : (
+                                <span className="font-body text-[11px] text-gray-300 italic">No upcoming appointments</span>
+                              )}
+                            </div>
+                            <div className="flex items-center justify-between pt-3 border-t border-gray-50">
+                              {lastActivity ? (
+                                <span className="font-body text-[11px] text-gray-400 flex items-center gap-1.5">
+                                  <Clock size={10} />
+                                  Last activity {format(parseISO(lastActivity), 'MMM d, yyyy')}
+                                </span>
+                              ) : (
+                                <span className="font-body text-[11px] text-gray-300 italic">No activity yet</span>
+                              )}
+                              <ChevronRight size={14} className="text-gray-300 group-hover:text-primary transition-colors flex-shrink-0" />
+                            </div>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+              {filteredArchived.length > 0 && (
+                <div>
+                  <p className="font-body text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Archived ({filteredArchived.length})</p>
+                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                    {filteredArchived.map((patient) => (
+                      <div
+                        key={patient.id}
+                        onClick={() => navigate(`/patients/${patient.id}`)}
+                        className="group cursor-pointer rounded-2xl bg-white border border-gray-100 border-l-[3px] border-l-transparent hover:border-l-mauve shadow-sm hover:shadow-card-hover opacity-70 hover:opacity-100 transition-all duration-200"
+                      >
+                        <div className="px-4 py-3 flex gap-2.5">
+                          <div className="w-10 h-10 rounded-full overflow-hidden bg-primary-light flex items-center justify-center flex-shrink-0 mt-0.5">
+                            {patient.avatar_url
+                              ? <img src={patient.avatar_url} className="w-full h-full object-cover" alt="" />
+                              : <span className="font-body text-xs font-semibold text-primary select-none">{patient.first_name?.[0]}{patient.last_name?.[0]}</span>
+                            }
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-0.5">
+                              <h3 className="font-heading text-base font-semibold text-gray-600 group-hover:text-primary transition-colors leading-tight truncate flex-1">
+                                {patient.first_name} {patient.last_name}
+                              </h3>
+                              <span className="flex-shrink-0 inline-flex items-center px-2 py-0.5 rounded-full bg-gray-100 text-gray-400 font-body text-[10px] font-semibold uppercase tracking-wide border border-gray-200">
+                                Archived
+                              </span>
+                            </div>
+                            {patient.quick_description && (
+                              <p className="font-body text-xs text-gray-400 truncate mb-1.5">{patient.quick_description}</p>
+                            )}
+                            <div className="flex items-center justify-between mt-1">
+                              {patient.archived_at ? (
+                                <p className="font-body text-xs text-gray-400 flex items-center gap-1.5">
+                                  <Clock size={10} />
+                                  Archived {format(parseISO(patient.archived_at), 'MMM d, yyyy')}
+                                </p>
+                              ) : <div />}
+                              <button
+                                onClick={e => { e.stopPropagation(); reactivatePatient(patient) }}
+                                className="px-2.5 py-1 rounded-lg border border-gray-200 text-gray-500 bg-white font-body text-[11px] font-semibold hover:bg-primary-light hover:text-primary hover:border-primary/30 transition-all flex-shrink-0"
+                              >
+                                Unarchive
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {filteredDeleted.length > 0 && (
+                <div>
+                  <p className="font-body text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Deleted ({filteredDeleted.length})</p>
+                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                    {filteredDeleted.map((patient) => (
+                      <div
+                        key={patient.id}
+                        className="group rounded-2xl bg-white border border-gray-100 border-l-[3px] border-l-transparent hover:border-l-mauve shadow-sm hover:shadow-card-hover opacity-60 hover:opacity-100 transition-all duration-200"
+                      >
+                        <div className="px-4 py-3 flex flex-col gap-3">
+                          <div className="flex gap-2.5">
+                            <div className="w-10 h-10 rounded-full overflow-hidden bg-primary-light flex items-center justify-center flex-shrink-0 mt-0.5">
+                              {patient.avatar_url
+                                ? <img src={patient.avatar_url} className="w-full h-full object-cover" alt="" />
+                                : <span className="font-body text-xs font-semibold text-primary select-none">{patient.first_name?.[0]}{patient.last_name?.[0]}</span>
+                              }
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 mb-0.5">
+                                <h3 className="font-heading text-base font-semibold text-gray-500 group-hover:text-primary transition-colors leading-tight truncate flex-1">
+                                  {patient.first_name} {patient.last_name}
+                                </h3>
+                                <span className="flex-shrink-0 inline-flex items-center px-2 py-0.5 rounded-full bg-gray-100 text-gray-400 font-body text-[10px] font-semibold uppercase tracking-wide border border-gray-200">
+                                  Deleted
+                                </span>
+                              </div>
+                              {patient.deleted_at && (
+                                <p className="font-body text-xs text-gray-400 flex items-center gap-1.5">
+                                  <Trash2 size={10} />
+                                  Deleted {format(parseISO(patient.deleted_at), 'MMM d, yyyy')}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => restorePatient(patient)}
+                              className="flex-1 px-2.5 py-1 rounded-lg border border-gray-200 text-gray-500 bg-white font-body text-[11px] font-semibold hover:bg-primary-light hover:text-primary hover:border-primary/30 transition-all"
+                            >
+                              Restore
+                            </button>
+                            <button
+                              onClick={() => setConfirmPermDelete(patient)}
+                              className="flex-1 px-2.5 py-1 rounded-lg border border-red-200 text-red-500 bg-white font-body text-[11px] font-semibold hover:bg-red-50 hover:border-red-600 hover:text-red-800 transition-all"
+                            >
+                              Permanently Delete
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )
+        ) : patients.length === 0 ? (
           <div className="card text-center py-12 border-2 border-dashed border-gray-100">
             <User size={32} className="text-gray-200 mx-auto mb-3" />
             <p className="font-heading text-xl text-gray-400 mb-1">No active patients yet</p>
@@ -450,13 +626,13 @@ export default function Dashboard() {
               New Patient Intake
             </button>
           </div>
-        ) : filteredPatients.length === 0 ? (
+        ) : filteredActive.length === 0 ? (
           <div className="card text-center py-8">
             <p className="font-body text-sm text-gray-400">No patients match "{searchQuery}"</p>
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-            {filteredPatients.map((patient) => {
+            {filteredActive.map((patient) => {
               const lastActivity = getMostRecentActivity(patient)
               const nextAppt    = getNextAppointment(patient)
 
@@ -468,9 +644,17 @@ export default function Dashboard() {
                 >
                   <div className="p-5">
                     <div className="flex items-start justify-between gap-2 mb-2">
-                      <h3 className="font-heading text-xl font-semibold text-gray-800 group-hover:text-primary transition-colors leading-tight">
-                        {patient.first_name} {patient.last_name}
-                      </h3>
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="w-14 h-14 rounded-full overflow-hidden bg-primary-light flex items-center justify-center flex-shrink-0">
+                          {patient.avatar_url
+                            ? <img src={patient.avatar_url} className="w-full h-full object-cover" alt="" />
+                            : <span className="font-body text-sm font-semibold text-primary select-none">{patient.first_name?.[0]}{patient.last_name?.[0]}</span>
+                          }
+                        </div>
+                        <h3 className="font-heading text-2xl font-semibold text-gray-800 group-hover:text-primary transition-colors leading-tight">
+                          {patient.first_name} {patient.last_name}
+                        </h3>
+                      </div>
                       <span className="flex-shrink-0 inline-flex items-center px-2 py-0.5 rounded-full bg-green-50 text-green-600 font-body text-[10px] font-semibold uppercase tracking-wide border border-green-100">
                         Active
                       </span>
@@ -549,7 +733,7 @@ export default function Dashboard() {
       </section>
 
       {/* Archived Patients */}
-      {archivedPatients.length > 0 && (
+      {!isSearching && archivedPatients.length > 0 && (
         <section className="mt-8">
           <button
             onClick={() => setShowArchived(p => !p)}
@@ -567,56 +751,49 @@ export default function Dashboard() {
           {showArchived && (
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
               {archivedPatients.map((patient) => {
-                const lastActivity = getMostRecentActivity(patient)
-                const nextAppt    = getNextAppointment(patient)
                 return (
                   <div
                     key={patient.id}
                     onClick={() => navigate(`/patients/${patient.id}`)}
                     className="group cursor-pointer rounded-2xl bg-white border border-gray-100 border-l-[3px] border-l-transparent hover:border-l-mauve shadow-sm hover:shadow-card-hover opacity-70 hover:opacity-100 transition-all duration-200"
                   >
-                    <div className="p-5">
-                      <div className="flex items-start justify-between gap-2 mb-2">
-                        <h3 className="font-heading text-xl font-semibold text-gray-600 group-hover:text-primary transition-colors leading-tight">
-                          {patient.first_name} {patient.last_name}
-                        </h3>
-                        <span className="flex-shrink-0 inline-flex items-center px-2 py-0.5 rounded-full bg-gray-100 text-gray-400 font-body text-[10px] font-semibold uppercase tracking-wide border border-gray-200">
-                          Archived
-                        </span>
+                    <div className="px-4 py-3 flex gap-2.5">
+                      {/* Avatar */}
+                      <div className="w-10 h-10 rounded-full overflow-hidden bg-primary-light flex items-center justify-center flex-shrink-0 mt-0.5">
+                        {patient.avatar_url
+                          ? <img src={patient.avatar_url} className="w-full h-full object-cover" alt="" />
+                          : <span className="font-body text-xs font-semibold text-primary select-none">{patient.first_name?.[0]}{patient.last_name?.[0]}</span>
+                        }
                       </div>
-
-                      {patient.quick_description && (
-                        <p className="font-body text-xs text-gray-400 mb-3 truncate">
-                          {patient.quick_description}
-                        </p>
-                      )}
-
-                      <div className="flex items-start gap-1.5 mb-3">
-                        <Calendar size={11} className="text-gray-300 mt-0.5 flex-shrink-0" />
-                        {nextAppt ? (
-                          <span className="font-body text-[11px] text-gray-400 truncate">
-                            {format(parseApptDateLocal(nextAppt.appointment_date), 'MMM d')} · {nextAppt.title}
+                      {/* Content */}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-0.5">
+                          <h3 className="font-heading text-base font-semibold text-gray-600 group-hover:text-primary transition-colors leading-tight truncate flex-1">
+                            {patient.first_name} {patient.last_name}
+                          </h3>
+                          <span className="flex-shrink-0 inline-flex items-center px-2 py-0.5 rounded-full bg-gray-100 text-gray-400 font-body text-[10px] font-semibold uppercase tracking-wide border border-gray-200">
+                            Archived
                           </span>
-                        ) : (
-                          <span className="font-body text-[11px] text-gray-300 italic">No upcoming appointments</span>
+                        </div>
+                        {patient.quick_description && (
+                          <p className="font-body text-xs text-gray-400 truncate mb-1.5">
+                            {patient.quick_description}
+                          </p>
                         )}
-                      </div>
-
-                      <div className="flex items-center justify-between pt-3 border-t border-gray-50">
-                        {lastActivity ? (
-                          <span className="font-body text-[11px] text-gray-400 flex items-center gap-1.5">
-                            <Clock size={10} />
-                            Last activity {format(parseISO(lastActivity), 'MMM d, yyyy')}
-                          </span>
-                        ) : (
-                          <span className="font-body text-[11px] text-gray-300 italic">No activity</span>
-                        )}
-                        <button
-                          onClick={e => { e.stopPropagation(); reactivatePatient(patient) }}
-                          className="px-2.5 py-1 rounded-lg border border-gray-200 text-gray-500 bg-white font-body text-[11px] font-semibold hover:bg-primary-light hover:text-primary hover:border-primary/30 transition-all"
-                        >
-                          Unarchive
-                        </button>
+                        <div className="flex items-center justify-between mt-1">
+                          {patient.archived_at ? (
+                            <p className="font-body text-xs text-gray-400 flex items-center gap-1.5">
+                              <Clock size={10} />
+                              Archived {format(parseISO(patient.archived_at), 'MMM d, yyyy')}
+                            </p>
+                          ) : <div />}
+                          <button
+                            onClick={e => { e.stopPropagation(); reactivatePatient(patient) }}
+                            className="px-2.5 py-1 rounded-lg border border-gray-200 text-gray-500 bg-white font-body text-[11px] font-semibold hover:bg-primary-light hover:text-primary hover:border-primary/30 transition-all flex-shrink-0"
+                          >
+                            Unarchive
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -628,7 +805,7 @@ export default function Dashboard() {
       )}
 
       {/* Deleted Patients */}
-      {deletedPatients.length > 0 && (
+      {!isSearching && deletedPatients.length > 0 && (
         <section className="mt-8">
           <button
             onClick={() => setShowDeleted(p => !p)}
@@ -650,23 +827,33 @@ export default function Dashboard() {
                   key={patient.id}
                   className="group rounded-2xl bg-white border border-gray-100 border-l-[3px] border-l-transparent hover:border-l-mauve shadow-sm hover:shadow-card-hover opacity-60 hover:opacity-100 transition-all duration-200"
                 >
-                  <div className="p-5">
-                    <div className="flex items-start justify-between gap-2 mb-2">
-                      <h3 className="font-heading text-xl font-semibold text-gray-500 group-hover:text-primary transition-colors leading-tight">
-                        {patient.first_name} {patient.last_name}
-                      </h3>
-                      <span className="flex-shrink-0 inline-flex items-center px-2 py-0.5 rounded-full bg-gray-100 text-gray-400 font-body text-[10px] font-semibold uppercase tracking-wide border border-gray-200">
-                        Deleted
-                      </span>
+                  <div className="px-4 py-3 flex flex-col gap-3">
+                    {/* Avatar + text */}
+                    <div className="flex gap-2.5">
+                      <div className="w-10 h-10 rounded-full overflow-hidden bg-primary-light flex items-center justify-center flex-shrink-0 mt-0.5">
+                        {patient.avatar_url
+                          ? <img src={patient.avatar_url} className="w-full h-full object-cover" alt="" />
+                          : <span className="font-body text-xs font-semibold text-primary select-none">{patient.first_name?.[0]}{patient.last_name?.[0]}</span>
+                        }
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-0.5">
+                          <h3 className="font-heading text-base font-semibold text-gray-500 group-hover:text-primary transition-colors leading-tight truncate flex-1">
+                            {patient.first_name} {patient.last_name}
+                          </h3>
+                          <span className="flex-shrink-0 inline-flex items-center px-2 py-0.5 rounded-full bg-gray-100 text-gray-400 font-body text-[10px] font-semibold uppercase tracking-wide border border-gray-200">
+                            Deleted
+                          </span>
+                        </div>
+                        {patient.deleted_at && (
+                          <p className="font-body text-xs text-gray-400 flex items-center gap-1.5">
+                            <Trash2 size={10} />
+                            Deleted {format(parseISO(patient.deleted_at), 'MMM d, yyyy')}
+                          </p>
+                        )}
+                      </div>
                     </div>
-
-                    {patient.deleted_at && (
-                      <p className="font-body text-xs text-gray-400 mb-4 flex items-center gap-1.5">
-                        <Trash2 size={10} />
-                        Deleted {format(parseISO(patient.deleted_at), 'MMM d, yyyy')}
-                      </p>
-                    )}
-
+                    {/* Buttons */}
                     <div className="flex gap-2">
                       <button
                         onClick={() => restorePatient(patient)}
