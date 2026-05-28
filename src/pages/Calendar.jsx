@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+import { useAuth } from '../context/AuthContext'
 import {
   format, parseISO, startOfMonth, endOfMonth, eachDayOfInterval,
   addMonths, subMonths, startOfWeek, endOfWeek, addWeeks, subWeeks,
@@ -47,6 +48,7 @@ function parseApptDateLocal(dateStr) {
 }
 
 export default function CalendarPage() {
+  const { session } = useAuth()
   const navigate = useNavigate()
   const [view, setView] = useState('month')
   const [colorMode, setColorMode] = useState('type') // 'type' | 'patient'
@@ -93,6 +95,7 @@ export default function CalendarPage() {
       provider: draft.provider || null,
       location: draft.location || null,
       notes: draft.notes || null,
+      user_id: session.user.id,
     }
     const { data } = await supabase.from('appointments').insert(payload).select(APPT_SELECT).single()
     if (data) {

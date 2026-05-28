@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+import { useAuth } from '../context/AuthContext'
 import { format, parseISO, differenceInYears, isAfter, startOfDay, startOfMonth, endOfMonth, eachDayOfInterval, getDay, addMonths, subMonths } from 'date-fns'
 import {
   ArrowLeft, Phone, Mail, MapPin, User, Pill, Activity, Stethoscope,
@@ -126,6 +127,7 @@ function getBodySnippet(body, query) {
 }
 
 export default function PatientProfile() {
+  const { session } = useAuth()
   const { id } = useParams()
   const navigate = useNavigate()
 
@@ -649,7 +651,7 @@ export default function PatientProfile() {
     setSavingAppt(true)
     // Use presence of id to distinguish insert vs update (supports edit-from-view-mode)
     if (!resolvedDraft.id) {
-      const payload = { patient_id: id, ...resolvedDraft }
+      const payload = { patient_id: id, ...resolvedDraft, user_id: session.user.id }
       console.log('[saveApptModal] Inserting:', payload)
       const { data, error } = await supabase.from('appointments').insert(payload).select().single()
       console.log('[saveApptModal] Insert result:', data, 'Error:', error)
@@ -684,7 +686,7 @@ export default function PatientProfile() {
     const { error } = await supabase.storage.from('documents').upload(path, file)
     if (!error) {
       const { data } = await supabase.from('documents')
-        .insert({ patient_id: id, name: file.name, file_url: path, file_type: file.type })
+        .insert({ patient_id: id, name: file.name, file_url: path, file_type: file.type, user_id: session.user.id })
         .select().single()
       if (data) setDocuments(prev => [data, ...prev])
     }

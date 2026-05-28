@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../lib/supabase'
+import { useAuth } from '../context/AuthContext'
 import { format, parseISO } from 'date-fns'
 import {
   FolderOpen, Pin, PinOff, Upload, Trash2, FileText, File, Image,
@@ -7,6 +8,7 @@ import {
 } from 'lucide-react'
 
 export default function Documents() {
+  const { session } = useAuth()
   const [docs, setDocs] = useState([])
   const [patients, setPatients] = useState([])
   const [loading, setLoading] = useState(true)
@@ -61,6 +63,7 @@ export default function Documents() {
       file_type: file.type,
       is_pinned: false,
       patient_id: null,
+      user_id: session.user.id,
     }).select('*, patients(id, first_name, last_name)').single()
 
     if (data) setDocs(prev => [data, ...prev])

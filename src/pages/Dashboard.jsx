@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+import { useAuth } from '../context/AuthContext'
 import { format, isToday, parseISO, isAfter, startOfDay, addDays, isSameDay } from 'date-fns'
 import {
   Pin, Calendar, FileText, File, Image, Plus, Clock,
@@ -54,6 +55,7 @@ const APPT_TYPE_COLORS = {
 const APPT_SELECT = 'id, title, appointment_date, appointment_type, patient_id, provider, location, notes, patients(first_name, last_name)'
 
 export default function Dashboard() {
+  const { session } = useAuth()
   const navigate = useNavigate()
   const [patients, setPatients] = useState([])
   const [archivedPatients, setInactivePatients] = useState([])
@@ -135,6 +137,7 @@ export default function Dashboard() {
       provider: draft.provider || null,
       location: draft.location || null,
       notes: draft.notes || null,
+      user_id: session.user.id,
     }
     const { data } = await supabase
       .from('appointments')

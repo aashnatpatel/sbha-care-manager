@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+import { useAuth } from '../context/AuthContext'
 import { ClipboardList, Plus, Trash2, Check, ChevronRight, FileText, Paperclip, X } from 'lucide-react'
 import { useEditor, EditorContent } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
@@ -31,6 +32,7 @@ const STEPS = ['Basic Info', 'Goals & Concerns', 'Medical History', 'Medications
 const INTAKE_NOTE_TYPES = ['General', 'Appointment Summary', 'Phone Call', 'Care Coordination', 'Advocacy Note', 'Family Meeting', 'Other']
 
 export default function IntakeForm() {
+  const { session } = useAuth()
   const navigate = useNavigate()
   const [step, setStep] = useState(0)
   const [saving, setSaving] = useState(false)
@@ -118,6 +120,7 @@ export default function IntakeForm() {
           f === 'Other' && overwhelmingOtherText.trim() ? `Other: ${overwhelmingOtherText.trim()}` : f
         ),
         care_experience: careExp,
+        user_id: session.user.id,
       }).select().single()
 
       if (patientError) throw patientError
@@ -239,6 +242,7 @@ export default function IntakeForm() {
           name: file.name,
           file_url: upload.path,
           file_type: file.type,
+          user_id: session.user.id,
         })
         console.log('[handleSubmit] documents insert result:', { docData, docError })
         if (docError) console.error('[handleSubmit] documents insert failed:', docError)
