@@ -126,7 +126,7 @@ export default function Documents() {
   const unpinned = filtered.filter(d => !d.is_pinned)
 
   return (
-    <div className="p-8 max-w-4xl">
+    <div className="p-4 sm:p-6 md:p-8 max-w-4xl">
       <div className="flex items-center justify-between mb-8">
         <div>
           <h1 className="section-title text-3xl">Documents</h1>
@@ -139,7 +139,7 @@ export default function Documents() {
       {/* Upload card */}
       <div className="card mb-8">
         <h2 className="font-body text-sm font-semibold text-gray-600 mb-3">Upload Document</h2>
-        <div className="flex gap-3 flex-wrap">
+        <div className="flex flex-col sm:flex-row gap-3">
           <input
             className="input flex-1 min-w-48"
             placeholder="Document name (optional)"
@@ -214,9 +214,9 @@ export default function Documents() {
 
       {/* ── Rename Modal ── */}
       {renamingDoc && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
           <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" onClick={() => setRenamingDoc(null)} />
-          <div className="relative bg-white rounded-2xl shadow-xl p-6 w-full max-w-sm">
+          <div className="relative bg-white rounded-t-2xl sm:rounded-2xl shadow-xl p-6 w-full sm:max-w-sm">
             <h3 className="font-heading text-xl text-gray-800 mb-4">Rename Document</h3>
             <input
               className="input w-full"
@@ -235,9 +235,9 @@ export default function Documents() {
 
       {/* ── Assign Modal ── */}
       {assigningDoc && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
           <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" onClick={() => setAssigningDoc(null)} />
-          <div className="relative bg-white rounded-2xl shadow-xl p-6 w-full max-w-sm">
+          <div className="relative bg-white rounded-t-2xl sm:rounded-2xl shadow-xl p-6 w-full sm:max-w-sm">
             <h3 className="font-heading text-xl text-gray-800 mb-1">
               {assigningDoc.patient_id ? 'Reassign Patient' : 'Assign to Patient'}
             </h3>

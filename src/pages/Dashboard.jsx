@@ -246,27 +246,28 @@ export default function Dashboard() {
   }
 
   return (
-    <div className="p-8 max-w-7xl">
+    <div className="p-4 sm:p-6 md:p-8 max-w-7xl">
 
       {/* Header */}
-      <div className="flex items-center justify-between mb-8">
+      <div className="flex items-center justify-between mb-6 md:mb-8">
         <div>
-          <h1 className="section-title text-3xl">Dashboard</h1>
-          <p className="font-body text-sm text-gray-400 mt-0.5">
+          <h1 className="section-title text-2xl sm:text-3xl">Dashboard</h1>
+          <p className="font-body text-xs sm:text-sm text-gray-400 mt-0.5">
             {format(new Date(), 'EEEE, MMMM d, yyyy')}
           </p>
         </div>
         <button
           onClick={() => navigate('/intake')}
-          className="btn-primary flex items-center gap-2 py-2.5 px-5"
+          className="btn-primary flex items-center gap-2 py-2 px-3 sm:py-2.5 sm:px-5 text-sm"
         >
-          <Plus size={16} />
-          New Patient
+          <Plus size={15} />
+          <span className="hidden sm:inline">New Patient</span>
+          <span className="sm:hidden">New</span>
         </button>
       </div>
 
       {/* Pinned Documents */}
-      <section className="mb-8">
+      <section className="mb-6 md:mb-8">
         <div className="flex items-center gap-2 mb-3">
           <Pin size={15} className="text-gray-500" />
           <h2 className="font-body text-sm font-semibold text-gray-500 uppercase tracking-wider">
@@ -284,7 +285,7 @@ export default function Dashboard() {
             </span>
           </div>
         ) : (
-          <div className="flex flex-wrap gap-3">
+          <div className="flex gap-3 overflow-x-auto pb-1 sm:flex-wrap sm:pb-0">
             {pinnedDocs.map((doc) => (
               <div
                 key={doc.id}
@@ -314,7 +315,7 @@ export default function Dashboard() {
       </section>
 
       {/* Schedule */}
-      <section className="mb-8">
+      <section className="mb-6 md:mb-8">
         <div className="flex items-center gap-1.5 mb-3 flex-wrap">
           <Calendar size={15} className="text-primary" />
 
@@ -419,7 +420,7 @@ export default function Dashboard() {
       </section>
 
       {/* Active Patients */}
-      <section>
+      <section id="patients-section">
         <div className="flex items-center gap-2 mb-3">
           <Users size={15} className="text-gray-500" />
           <h2 className="font-body text-sm font-semibold text-gray-500 uppercase tracking-wider">
@@ -449,7 +450,7 @@ export default function Dashboard() {
               {filteredActive.length > 0 && (
                 <div>
                   <p className="font-body text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Active ({filteredActive.length})</p>
-                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                     {filteredActive.map((patient) => {
                       const lastActivity = getMostRecentActivity(patient)
                       const nextAppt    = getNextAppointment(patient)
@@ -508,7 +509,7 @@ export default function Dashboard() {
               {filteredArchived.length > 0 && (
                 <div>
                   <p className="font-body text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Archived ({filteredArchived.length})</p>
-                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                     {filteredArchived.map((patient) => (
                       <div
                         key={patient.id}
@@ -558,7 +559,7 @@ export default function Dashboard() {
               {filteredDeleted.length > 0 && (
                 <div>
                   <p className="font-body text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Deleted ({filteredDeleted.length})</p>
-                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                     {filteredDeleted.map((patient) => (
                       <div
                         key={patient.id}
@@ -631,7 +632,7 @@ export default function Dashboard() {
             <p className="font-body text-sm text-gray-400">No patients match "{searchQuery}"</p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {filteredActive.map((patient) => {
               const lastActivity = getMostRecentActivity(patient)
               const nextAppt    = getNextAppointment(patient)
@@ -749,7 +750,7 @@ export default function Dashboard() {
           </button>
 
           {showArchived && (
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               {archivedPatients.map((patient) => {
                 return (
                   <div
@@ -821,7 +822,7 @@ export default function Dashboard() {
           </button>
 
           {showDeleted && (
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               {deletedPatients.map((patient) => (
                 <div
                   key={patient.id}
@@ -878,9 +879,9 @@ export default function Dashboard() {
 
       {/* Permanent Delete Confirmation */}
       {confirmPermDelete && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
           <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" onClick={() => setConfirmPermDelete(null)} />
-          <div className="relative bg-white rounded-2xl shadow-xl border border-gray-100 p-6 w-full max-w-sm">
+          <div className="relative bg-white rounded-t-2xl sm:rounded-2xl shadow-xl border border-gray-100 p-6 w-full sm:max-w-sm">
             <h3 className="font-heading text-xl text-gray-800 mb-2">Permanently Delete?</h3>
             <p className="font-body text-sm text-gray-500 mb-6">
               This will permanently delete <strong>{confirmPermDelete.first_name} {confirmPermDelete.last_name}</strong> and all their data. This cannot be undone.
@@ -1001,11 +1002,11 @@ function ApptDetailModal({ appt, onClose, onUpdate, onDelete, onViewPatient, sav
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
       onClick={e => { if (e.target === e.currentTarget) onClose() }}
     >
       <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" />
-      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-[560px] flex flex-col overflow-hidden">
+      <div className="relative bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl w-full sm:max-w-[560px] flex flex-col overflow-hidden max-h-[95vh] sm:max-h-none">
 
         {mode === 'view' ? (
           <>
@@ -1265,11 +1266,11 @@ function AddEventModal({ onClose, onSave, saving, defaultDate, patients }) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
       onClick={e => { if (e.target === e.currentTarget) onClose() }}
     >
       <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" />
-      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md flex flex-col overflow-hidden">
+      <div className="relative bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl w-full sm:max-w-md flex flex-col overflow-hidden max-h-[95vh] sm:max-h-none">
 
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 flex-shrink-0">
           <h2 className="font-heading text-xl font-semibold text-gray-800">Add Event</h2>

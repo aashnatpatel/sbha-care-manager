@@ -191,42 +191,44 @@ export default function CalendarPage() {
   }
 
   return (
-    <div className="p-8 max-w-7xl">
+    <div className="p-4 sm:p-6 md:p-8 max-w-7xl">
 
       {/* ── Header ── */}
-      <div className="flex items-center justify-between mb-6">
-        <div className="flex items-center gap-3">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4 sm:mb-6">
+        {/* Left: nav + title */}
+        <div className="flex items-center gap-2 sm:gap-3">
           <div className="flex items-center gap-0.5">
             <button
               onClick={navigatePrev}
-              className="w-8 h-8 flex items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-700 transition-colors"
+              className="w-9 h-9 flex items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-700 transition-colors"
             >
               <ChevronLeft size={18} />
             </button>
             <button
               onClick={navigateNext}
-              className="w-8 h-8 flex items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-700 transition-colors"
+              className="w-9 h-9 flex items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-700 transition-colors"
             >
               <ChevronRight size={18} />
             </button>
           </div>
-          <h1 className="font-heading text-2xl font-semibold text-gray-800">{headerTitle}</h1>
+          <h1 className="font-heading text-xl sm:text-2xl font-semibold text-gray-800">{headerTitle}</h1>
           <button
             onClick={() => setCurrentDate(new Date())}
-            className="px-3 py-1 rounded-lg border border-gray-200 font-body text-xs font-semibold text-gray-500 hover:bg-gray-50 hover:text-gray-800 transition-colors"
+            className="px-3 py-1.5 rounded-lg border border-gray-200 font-body text-xs font-semibold text-gray-500 hover:bg-gray-50 hover:text-gray-800 transition-colors min-h-[36px]"
           >
             Today
           </button>
         </div>
 
-        <div className="flex items-center gap-3">
+        {/* Right: controls */}
+        <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
           {/* Color mode toggle */}
           <div className="flex rounded-xl border border-gray-200 bg-gray-50 p-0.5">
-            {[{ val: 'type', label: 'Color by Type' }, { val: 'patient', label: 'Color by Patient' }].map(({ val, label }) => (
+            {[{ val: 'type', label: 'By Type' }, { val: 'patient', label: 'By Patient' }].map(({ val, label }) => (
               <button
                 key={val}
                 onClick={() => setColorMode(val)}
-                className={`px-3 py-1.5 rounded-lg font-body text-xs font-semibold transition-all ${
+                className={`px-2.5 sm:px-3 py-1.5 rounded-lg font-body text-xs font-semibold transition-all min-h-[36px] ${
                   colorMode === val
                     ? 'bg-white text-primary shadow-sm border border-gray-100'
                     : 'text-gray-500 hover:text-gray-700'
@@ -243,7 +245,7 @@ export default function CalendarPage() {
               <button
                 key={v}
                 onClick={() => setView(v)}
-                className={`px-3 py-1.5 rounded-lg font-body text-xs font-semibold capitalize transition-all ${
+                className={`px-2.5 sm:px-3 py-1.5 rounded-lg font-body text-xs font-semibold capitalize transition-all min-h-[36px] ${
                   view === v
                     ? 'bg-white text-primary shadow-sm border border-gray-100'
                     : 'text-gray-500 hover:text-gray-700'
@@ -256,7 +258,7 @@ export default function CalendarPage() {
 
           <button
             onClick={() => setShowAddModal(true)}
-            className="btn-primary flex items-center gap-2 px-4 py-2 text-sm"
+            className="btn-primary flex items-center gap-2 px-3 sm:px-4 py-2 text-sm min-h-[36px]"
           >
             <Plus size={15} />
             Add Event
@@ -311,9 +313,10 @@ export default function CalendarPage() {
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
           {/* Day-of-week headers */}
           <div className="grid grid-cols-7 border-b border-gray-100">
-            {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => (
-              <div key={d} className="py-2.5 text-center font-body text-xs font-semibold text-gray-400 uppercase tracking-wider">
-                {d}
+            {[['Sun','S'],['Mon','M'],['Tue','T'],['Wed','W'],['Thu','T'],['Fri','F'],['Sat','S']].map(([full, short]) => (
+              <div key={full} className="py-2 sm:py-2.5 text-center font-body text-xs font-semibold text-gray-400 uppercase tracking-wider">
+                <span className="hidden sm:inline">{full}</span>
+                <span className="sm:hidden">{short}</span>
               </div>
             ))}
           </div>
@@ -327,32 +330,32 @@ export default function CalendarPage() {
               return (
                 <div
                   key={day.toISOString()}
-                  className={`min-h-[110px] p-1.5 ${!inMonth ? 'bg-gray-50/60' : ''}`}
+                  className={`min-h-[60px] sm:min-h-[110px] p-1 sm:p-1.5 ${!inMonth ? 'bg-gray-50/60' : ''}`}
                 >
-                  <div className={`w-7 h-7 mb-1 flex items-center justify-center rounded-full font-body text-sm font-medium ${
+                  <div className={`w-5 h-5 sm:w-7 sm:h-7 mb-0.5 sm:mb-1 flex items-center justify-center rounded-full font-body text-xs sm:text-sm font-medium ${
                     today ? 'bg-primary text-white' : inMonth ? 'text-gray-700' : 'text-gray-300'
                   }`}>
                     {format(day, 'd')}
                   </div>
                   <div className="space-y-0.5">
-                    {dayAppts.slice(0, 3).map(appt => {
+                    {dayAppts.slice(0, 2).map(appt => {
                       const c = getApptColor(appt)
                       return (
                         <button
                           key={appt.id}
                           onClick={() => setApptModal(appt)}
-                          className="w-full text-left rounded px-1.5 py-0.5 font-body text-[11px] leading-tight truncate transition-opacity hover:opacity-75"
+                          className="w-full text-left rounded px-1 sm:px-1.5 py-0.5 font-body text-[9px] sm:text-[11px] leading-tight truncate transition-opacity hover:opacity-75"
                           style={{ backgroundColor: c.bg, color: c.text }}
                         >
                           <span className="font-semibold">{appt.title}</span>
-                          {appt.patients && (
-                            <span className="opacity-70"> · {appt.patients.first_name} {appt.patients.last_name}</span>
-                          )}
+                          <span className="hidden sm:inline opacity-70">
+                            {appt.patients && ` · ${appt.patients.first_name} ${appt.patients.last_name}`}
+                          </span>
                         </button>
                       )
                     })}
-                    {dayAppts.length > 3 && (
-                      <p className="font-body text-[10px] text-gray-400 pl-1.5">+{dayAppts.length - 3} more</p>
+                    {dayAppts.length > 2 && (
+                      <p className="font-body text-[9px] sm:text-[10px] text-gray-400 pl-1 sm:pl-1.5">+{dayAppts.length - 2}</p>
                     )}
                   </div>
                 </div>
@@ -365,6 +368,8 @@ export default function CalendarPage() {
       {/* ── Week View ── */}
       {view === 'week' && (
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+          <div className="overflow-x-auto">
+          <div style={{ minWidth: '560px' }}>
           {/* Day headers */}
           <div className="grid grid-cols-7 border-b border-gray-100 divide-x divide-gray-50">
             {weekDays.map(day => {
@@ -425,6 +430,8 @@ export default function CalendarPage() {
                 </div>
               )
             })}
+          </div>
+          </div>
           </div>
         </div>
       )}
@@ -523,11 +530,11 @@ function ApptDetailModal({ appt, onClose, onUpdate, onDelete, onViewPatient, sav
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
       onClick={e => { if (e.target === e.currentTarget) onClose() }}
     >
       <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" />
-      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-[560px] flex flex-col overflow-hidden">
+      <div className="relative bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl w-full sm:max-w-[560px] flex flex-col overflow-hidden max-h-[95vh] sm:max-h-none">
 
         {mode === 'view' ? (
           <>
@@ -561,7 +568,7 @@ function ApptDetailModal({ appt, onClose, onUpdate, onDelete, onViewPatient, sav
               </div>
             </div>
 
-            <div className="px-7 pb-5 space-y-4 border-t border-gray-100 pt-5 overflow-y-auto">
+            <div className="px-7 pb-5 space-y-4 border-t border-gray-100 pt-5 overflow-y-auto flex-1">
               {appt.appointment_date && (
                 <div>
                   <p className="label">Date &amp; Time</p>
@@ -635,7 +642,7 @@ function ApptDetailModal({ appt, onClose, onUpdate, onDelete, onViewPatient, sav
               </button>
             </div>
 
-            <div className="px-7 py-5 space-y-3.5 overflow-y-auto max-h-[60vh]">
+            <div className="px-7 py-5 space-y-3.5 overflow-y-auto flex-1">
               <div>
                 <label className="label">Title *</label>
                 <input className="input mt-1" value={draft.title || ''} autoFocus
@@ -726,11 +733,11 @@ function AddEventModal({ onClose, onSave, saving, defaultDate, patients }) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
       onClick={e => { if (e.target === e.currentTarget) onClose() }}
     >
       <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" />
-      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md flex flex-col overflow-hidden">
+      <div className="relative bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl w-full sm:max-w-md flex flex-col overflow-hidden max-h-[95vh] sm:max-h-none">
 
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 flex-shrink-0">
           <h2 className="font-heading text-xl font-semibold text-gray-800">Add Event</h2>
@@ -739,7 +746,7 @@ function AddEventModal({ onClose, onSave, saving, defaultDate, patients }) {
           </button>
         </div>
 
-        <div className="px-6 py-5 space-y-3 overflow-y-auto max-h-[70vh]">
+        <div className="px-6 py-5 space-y-3 overflow-y-auto flex-1">
           <div>
             <label className="label">Title *</label>
             <input className="input" placeholder="Event title" value={draft.title} autoFocus

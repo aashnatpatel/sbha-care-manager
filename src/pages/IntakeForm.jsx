@@ -272,7 +272,7 @@ export default function IntakeForm() {
   }
 
   return (
-    <div className="p-8 max-w-3xl">
+    <div className="p-4 sm:p-6 md:p-8 max-w-3xl">
       {/* Header */}
       <div className="mb-8">
         <div className="flex items-center gap-2 mb-1">
@@ -314,7 +314,7 @@ export default function IntakeForm() {
         {step === 0 && (
           <div className="space-y-4">
             <h2 className="font-heading text-2xl text-gray-800 mb-4">Basic Information</h2>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="label">First Name *</label>
                 <input
@@ -340,7 +340,7 @@ export default function IntakeForm() {
                 )}
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="label">Date of Birth</label>
                 <input className="input" type="date" value={basicInfo.dob}
@@ -368,7 +368,7 @@ export default function IntakeForm() {
 
             <div className="pt-2 border-t border-gray-100">
               <h3 className="font-body text-sm font-semibold text-gray-600 mb-3">Emergency Contact</h3>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="label">Name</label>
                   <input className="input" value={basicInfo.emergency_contact_name}
@@ -464,7 +464,7 @@ export default function IntakeForm() {
 
             <div>
               <label className="label">Conditions</label>
-              <div className="grid grid-cols-3 gap-2 mb-3">
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-3">
                 {COMMON_CONDITIONS.map(cond => (
                   <button
                     key={cond}
@@ -495,7 +495,7 @@ export default function IntakeForm() {
               <div className="space-y-3">
                 {providers.map((p, i) => (
                   <div key={i} className="bg-gray-50 rounded-xl p-3 space-y-2">
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                       <input className="input bg-white text-sm py-2" value={p.name}
                         onChange={e => updateListItem(setProviders, i, 'name', e.target.value)}
                         placeholder="Provider name" />
@@ -514,7 +514,7 @@ export default function IntakeForm() {
                         <option>Other Specialist</option>
                       </select>
                     </div>
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                       <input className="input bg-white text-sm py-2" value={p.phone}
                         onChange={e => updateListItem(setProviders, i, 'phone', e.target.value)}
                         placeholder="Phone" />
@@ -545,7 +545,7 @@ export default function IntakeForm() {
               <div className="space-y-3">
                 {hospitalizations.map((h, i) => (
                   <div key={i} className="bg-gray-50 rounded-xl p-3 space-y-2">
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                       <input className="input bg-white text-sm py-2" value={h.reason}
                         onChange={e => updateListItem(setHospitalizations, i, 'reason', e.target.value)}
                         placeholder="Reason" />
@@ -553,7 +553,7 @@ export default function IntakeForm() {
                         onChange={e => updateListItem(setHospitalizations, i, 'hospital', e.target.value)}
                         placeholder="Hospital" />
                     </div>
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                       <div>
                         <label className="label text-[10px]">Admission</label>
                         <input className="input bg-white text-sm py-2" type="date" value={h.admission_date}
@@ -592,7 +592,7 @@ export default function IntakeForm() {
             <div className="space-y-3">
               {medications.map((m, i) => (
                 <div key={i} className="bg-gray-50 rounded-xl p-4 space-y-3">
-                  <div className="grid grid-cols-3 gap-2">
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                     <input className="input bg-white text-sm py-2 col-span-1" value={m.name}
                       onChange={e => updateListItem(setMedications, i, 'name', e.target.value)}
                       placeholder="Medication name" />
@@ -852,7 +852,7 @@ export default function IntakeForm() {
             type="button"
             onClick={() => setStep(s => s - 1)}
             disabled={step === 0}
-            className="btn-ghost disabled:opacity-0 disabled:pointer-events-none"
+            className="btn-ghost disabled:opacity-0 disabled:pointer-events-none min-h-[44px]"
           >
             Back
           </button>
@@ -861,7 +861,7 @@ export default function IntakeForm() {
             <button
               type="button"
               onClick={() => tryNavigate(step + 1)}
-              className="btn-primary flex items-center gap-2 py-2.5 px-6"
+              className="btn-primary flex items-center gap-2 py-2.5 px-6 min-h-[44px]"
             >
               Continue <ChevronRight size={15} />
             </button>
@@ -870,7 +870,7 @@ export default function IntakeForm() {
               type="button"
               onClick={handleSubmit}
               disabled={saving}
-              className="btn-primary flex items-center gap-2 py-2.5 px-6 disabled:opacity-60"
+              className="btn-primary flex items-center gap-2 py-2.5 px-6 disabled:opacity-60 min-h-[44px]"
             >
               {saving ? (
                 <>

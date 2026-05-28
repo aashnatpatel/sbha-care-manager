@@ -1017,16 +1017,16 @@ export default function PatientProfile() {
 
   // ── Render ────────────────────────────────────────────────────
   return (
-    <div className="p-8 max-w-7xl">
+    <div className="p-4 sm:p-6 md:p-8 max-w-7xl">
       {/* Back */}
-      <button onClick={() => navigate('/')} className="flex items-center gap-1.5 text-sm font-body text-gray-400 hover:text-primary transition-colors mb-6">
+      <button onClick={() => navigate('/')} className="flex items-center gap-1.5 text-sm font-body text-gray-400 hover:text-primary transition-colors mb-4 sm:mb-6 min-h-[44px]">
         <ArrowLeft size={15} /> Back to Dashboard
       </button>
 
       {/* ── HEADER ── */}
-      <div className="mb-8">
-        <div className="flex items-start justify-between flex-wrap gap-4">
-          <div className="flex items-start gap-5">
+      <div className="mb-6 md:mb-8">
+        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+          <div className="flex items-start gap-3 sm:gap-5">
             {/* Avatar */}
             <input ref={avatarInputRef} type="file" className="hidden" accept="image/jpeg,image/png,image/webp" onChange={openCropModal} />
             <button
@@ -1050,29 +1050,29 @@ export default function PatientProfile() {
               </div>
             </button>
           <div>
-            <h1 className="font-heading text-4xl font-semibold text-gray-800">
+            <h1 className="font-heading text-2xl sm:text-4xl font-semibold text-gray-800">
               {patient.first_name} {patient.last_name}
             </h1>
-            <div className="flex items-center gap-3 mt-2 flex-wrap">
-              <div className="flex items-center gap-0 font-body text-sm text-gray-500">
-                {age && <span>Age {age}</span>}
-                {patient.dob && (
-                  <><span className="mx-2">|</span><span>DOB {format(parseISO(patient.dob), 'MMMM d, yyyy')}</span></>
-                )}
-                {patient.client_since && (
-                  <><span className="mx-2">|</span><span>Client since {format(parseISO(patient.client_since), 'MMMM yyyy')}</span></>
-                )}
-              </div>
-              <span className={`tag ml-1 ${patient.status === 'active' ? 'bg-green-50 text-green-600' : 'bg-gray-100 text-gray-500'}`}>
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mt-1 sm:mt-2">
+              <span className={`tag ${patient.status === 'active' ? 'bg-green-50 text-green-600' : 'bg-gray-100 text-gray-500'}`}>
                 {patient.status}
               </span>
+              <div className="flex flex-wrap items-center gap-x-1 font-body text-xs sm:text-sm text-gray-500">
+                {age && <span>Age {age}</span>}
+                {patient.dob && (
+                  <><span className="text-gray-300">·</span><span className="hidden sm:inline">DOB </span><span>{format(parseISO(patient.dob), 'MMM d, yyyy')}</span></>
+                )}
+                {patient.client_since && (
+                  <><span className="text-gray-300">·</span><span>Since {format(parseISO(patient.client_since), 'MMM yyyy')}</span></>
+                )}
+              </div>
             </div>
 
             {/* Quick note — inline editable */}
             {editingQuickNote ? (
               <input
                 autoFocus
-                className="mt-2 w-full max-w-md font-body text-sm text-gray-600 bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:border-primary/40 focus:ring-1 focus:ring-primary/10 transition-all"
+                className="mt-2 w-full sm:max-w-md font-body text-sm text-gray-600 bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:border-primary/40 focus:ring-1 focus:ring-primary/10 transition-all"
                 value={quickNoteValue}
                 onChange={e => setQuickNoteValue(e.target.value)}
                 onBlur={saveQuickNote}
@@ -1098,10 +1098,10 @@ export default function PatientProfile() {
           </div>
           </div>{/* end flex items-start gap-5 */}
 
-          <div className="flex items-center gap-3 flex-wrap">
+          <div className="flex items-center gap-2 sm:gap-3 flex-wrap sm:flex-nowrap sm:flex-shrink-0">
             <button
               onClick={openIntakePanel}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-xl font-body text-sm font-semibold shadow-sm transition-all bg-primary text-white hover:bg-primary/90"
+              className="flex items-center gap-2 px-3 py-2 rounded-xl font-body text-sm font-semibold shadow-sm transition-all bg-primary text-white hover:bg-primary/90 min-h-[44px]"
             >
               <ClipboardList size={15} />
               Intake &amp; Background
@@ -1109,7 +1109,7 @@ export default function PatientProfile() {
             <button
               onClick={generateAISummary}
               disabled={aiLoading}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-xl font-body text-sm font-semibold shadow-sm transition-all bg-primary text-white hover:bg-primary/90 disabled:opacity-60"
+              className="flex items-center gap-2 px-3 py-2 rounded-xl font-body text-sm font-semibold shadow-sm transition-all bg-primary text-white hover:bg-primary/90 disabled:opacity-60 min-h-[44px]"
             >
               <Sparkles size={15} />
               {aiLoading ? 'Generating…' : 'AI Briefing'}
@@ -1186,7 +1186,7 @@ export default function PatientProfile() {
       </div>
 
       {/* ── THREE-COLUMN GRID ── */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-7">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-7">
 
         {/* ── LEFT: Demographics / Emergency / Insurance / Documents ── */}
         <div className="space-y-6">
@@ -1440,9 +1440,9 @@ export default function PatientProfile() {
 
             {/* Rename Modal */}
             {renamingDoc && (
-              <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+              <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
                 <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" onClick={() => setRenamingDoc(null)} />
-                <div className="relative bg-white rounded-2xl shadow-xl p-6 w-full max-w-sm">
+                <div className="relative bg-white rounded-t-2xl sm:rounded-2xl shadow-xl p-6 w-full sm:max-w-sm">
                   <h3 className="font-heading text-xl text-gray-800 mb-4">Rename Document</h3>
                   <input
                     className="input w-full"
@@ -1461,9 +1461,9 @@ export default function PatientProfile() {
 
             {/* Reassign Modal */}
             {reassigningDoc && (
-              <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+              <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
                 <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" onClick={() => setReassigningDoc(null)} />
-                <div className="relative bg-white rounded-2xl shadow-xl p-6 w-full max-w-sm">
+                <div className="relative bg-white rounded-t-2xl sm:rounded-2xl shadow-xl p-6 w-full sm:max-w-sm">
                   <h3 className="font-heading text-xl text-gray-800 mb-1">Reassign Document</h3>
                   <p className="font-body text-xs text-gray-400 mb-4 truncate">{reassigningDoc.name}</p>
                   <div className="space-y-1 max-h-64 overflow-y-auto -mx-1 px-1">
@@ -2554,9 +2554,9 @@ export default function PatientProfile() {
 
       {/* ── AVATAR CROP MODAL ── */}
       {cropModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
           <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setCropModal(null)} />
-          <div className="relative bg-white rounded-2xl shadow-2xl p-6 w-full max-w-sm flex flex-col items-center gap-5">
+          <div className="relative bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl p-6 w-full sm:max-w-sm flex flex-col items-center gap-5">
             <h3 className="font-heading text-xl text-gray-800 self-start">Crop Photo</h3>
             <AvatarEditor
               ref={avatarEditorRef}
@@ -2592,9 +2592,9 @@ export default function PatientProfile() {
 
       {/* ── DELETE PATIENT CONFIRMATION ── */}
       {showDeleteConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
           <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" onClick={() => setShowDeleteConfirm(false)} />
-          <div className="relative bg-white rounded-2xl shadow-xl border border-gray-100 p-6 w-full max-w-sm">
+          <div className="relative bg-white rounded-t-2xl sm:rounded-2xl shadow-xl border border-gray-100 p-6 w-full sm:max-w-sm">
             <h3 className="font-heading text-xl text-gray-800 mb-2">Delete Patient?</h3>
             <p className="font-body text-sm text-gray-500 mb-6">
               Are you sure you want to delete this patient? They can be restored from the dashboard.
@@ -2989,7 +2989,7 @@ function TBtn({ children, onMouseDown, active, title }) {
     <button
       onMouseDown={onMouseDown}
       title={title}
-      className={`w-7 h-7 rounded flex items-center justify-center transition-all ${
+      className={`w-8 h-8 sm:w-7 sm:h-7 rounded flex items-center justify-center transition-all ${
         active ? 'bg-primary text-white' : 'text-gray-500 hover:bg-gray-200'
       }`}
     >
@@ -3153,9 +3153,9 @@ function AppointmentModal({ modal, onClose, onSave, onDelete, saving }) {
     : null
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
       <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" />
-      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-lg flex flex-col overflow-hidden">
+      <div className="relative bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl w-full sm:max-w-lg flex flex-col overflow-hidden max-h-[95vh] sm:max-h-none">
 
         {mode === 'view' ? (
           <>
@@ -3370,9 +3370,9 @@ function InsuranceModal({ modal, onClose, onSave, saving }) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
       <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" />
-      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md flex flex-col overflow-hidden">
+      <div className="relative bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl w-full sm:max-w-md flex flex-col overflow-hidden max-h-[95vh] sm:max-h-none">
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
           <h2 className="font-heading text-xl font-semibold text-gray-800">
             {modal.mode === 'new' ? 'Add Insurance' : 'Edit Insurance'}
@@ -3700,12 +3700,12 @@ function NoteModal({ modal, patientId, patientName, onClose, onSave, onUpdate, o
   return (
     <>
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
       onClick={e => { if (e.target === e.currentTarget) onClose() }}
     >
       <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" />
 
-      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-2xl min-w-[520px] max-h-[90vh] flex flex-col overflow-hidden">
+      <div className="relative bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl w-full sm:max-w-2xl sm:min-w-[520px] max-h-[95vh] sm:max-h-[90vh] flex flex-col overflow-hidden">
 
         {/* Header — view mode */}
         {!isNew && mode === 'view' ? (
@@ -3993,10 +3993,10 @@ function NoteModal({ modal, patientId, patientName, onClose, onSave, onUpdate, o
 function DocPreviewModal({ doc, url, onClose, onDownload }) {
   const category = getDocFileCategory(doc)
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-4 bg-black/50" onClick={onClose}>
       <div
-        className="bg-white rounded-2xl shadow-2xl flex flex-col w-full max-w-4xl"
-        style={{ height: '90vh' }}
+        className="bg-white sm:rounded-2xl shadow-2xl flex flex-col w-full sm:max-w-4xl"
+        style={{ height: '100dvh' }}
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
