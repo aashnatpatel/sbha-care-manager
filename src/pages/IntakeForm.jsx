@@ -40,7 +40,7 @@ export default function IntakeForm() {
 
   // Step 0: Basic Info
   const [basicInfo, setBasicInfo] = useState({
-    first_name: '', last_name: '', dob: '', phone: '', email: '', address: '',
+    first_name: '', last_name: '', dob: '', phone: '', email: '', address: '', occupation: '',
     emergency_contact_name: '', emergency_contact_phone: '', emergency_contact_relationship: '',
   })
 
@@ -112,6 +112,7 @@ export default function IntakeForm() {
         phone: basicInfo.phone,
         email: basicInfo.email,
         address: basicInfo.address,
+        occupation: basicInfo.occupation || null,
         emergency_contact_name: basicInfo.emergency_contact_name,
         emergency_contact_phone: basicInfo.emergency_contact_phone,
         emergency_contact_relationship: basicInfo.emergency_contact_relationship,
@@ -373,6 +374,12 @@ export default function IntakeForm() {
               <input className="input" value={basicInfo.address}
                 onChange={e => setBasicInfo(p => ({ ...p, address: e.target.value }))}
                 placeholder="123 Main St, City, State 00000" />
+            </div>
+            <div>
+              <label className="label">Occupation <span className="text-gray-400 font-normal">(optional)</span></label>
+              <input className="input" value={basicInfo.occupation}
+                onChange={e => setBasicInfo(p => ({ ...p, occupation: e.target.value }))}
+                placeholder="e.g. Retired teacher, Software engineer" />
             </div>
 
             <div className="pt-2 border-t border-gray-100">

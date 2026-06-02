@@ -10,7 +10,7 @@ import {
   Shield, ShieldX, X, Check, ChevronDown, ChevronUp, ChevronRight, ChevronLeft, Target, Paperclip,
   Download, List, ListOrdered, ToggleLeft, ToggleRight, Search, CheckCircle, MoreVertical, SlidersHorizontal, ClipboardList, Printer, Square,
   File, Image, Camera,
-  Mic, MicOff, Play, Pause, Rewind, FastForward,
+  Mic, MicOff, Play, Pause, Rewind, FastForward, Briefcase,
 } from 'lucide-react'
 import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, LevelFormat } from 'docx'
 import { saveAs } from 'file-saver'
@@ -969,6 +969,7 @@ export default function PatientProfile() {
       ${field('Phone', patient.phone)}
       ${field('Email', patient.email)}
       ${field('Address', patient.address)}
+      ${field('Occupation', patient.occupation)}
     </div>
   </div>
 
@@ -1563,12 +1564,16 @@ export default function PatientProfile() {
                 <Field label="Address">
                   <input className="input" value={draftPatient.address || ''} onChange={e => setDraftPatient(p => ({ ...p, address: e.target.value }))} />
                 </Field>
+                <Field label="Occupation">
+                  <input className="input" value={draftPatient.occupation || ''} onChange={e => setDraftPatient(p => ({ ...p, occupation: e.target.value }))} placeholder="e.g. Retired teacher" />
+                </Field>
               </div>
             ) : (
               <div className="space-y-2">
                 <InfoRow icon={<Phone size={13} />} value={patient.phone} placeholder="No phone" />
                 <InfoRow icon={<Mail size={13} />} value={patient.email} placeholder="No email" />
                 <InfoRow icon={<MapPin size={13} />} value={patient.address} placeholder="No address" />
+                <InfoRow icon={<Briefcase size={13} />} value={patient.occupation} placeholder="No occupation on file" />
               </div>
             )}
           </SectionCard>
