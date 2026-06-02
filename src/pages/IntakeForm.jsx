@@ -55,6 +55,7 @@ export default function IntakeForm() {
   const [customConditions, setCustomConditions] = useState('')
   const [hospitalizations, setHospitalizations] = useState([{ reason: '', hospital: '', admission_date: '', discharge_date: '' }])
   const [providers, setProviders] = useState([{ name: '', role: 'PCP', phone: '', practice: '' }])
+  const [intakeAllergies, setIntakeAllergies] = useState([])
 
   // Step 3: Medications
   const [medications, setMedications] = useState([{ name: '', dose: '', frequency: '', concerns: '' }])
@@ -164,6 +165,14 @@ export default function IntakeForm() {
       if (allConditions.length > 0) {
         await supabase.from('conditions').insert(
           allConditions.map(name => ({ patient_id: patientId, name }))
+        )
+      }
+
+      // Insert allergies
+      const validAllergies = intakeAllergies.filter(a => a.name.trim())
+      if (validAllergies.length > 0) {
+        await supabase.from('allergies').insert(
+          validAllergies.map(a => ({ patient_id: patientId, name: a.name, reaction: a.reaction || null, severity: a.severity || 'Unknown' }))
         )
       }
 
@@ -579,6 +588,54 @@ export default function IntakeForm() {
                   className="flex items-center gap-1.5 text-sm text-primary font-body hover:underline"
                 >
                   <Plus size={14} /> Add Hospitalization
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <label className="label">Allergies</label>
+              <div className="space-y-2">
+                {intakeAllergies.map((a, i) => (
+                  <div key={i} className="bg-gray-50 rounded-xl p-3 space-y-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <input
+                        className="input bg-white text-sm py-2"
+                        value={a.name}
+                        onChange={e => updateListItem(setIntakeAllergies, i, 'name', e.target.value)}
+                        placeholder="Allergy name (e.g. Penicillin)"
+                      />
+                      <select
+                        className="input bg-white text-sm py-2"
+                        value={a.severity}
+                        onChange={e => updateListItem(setIntakeAllergies, i, 'severity', e.target.value)}
+                      >
+                        <option value="Unknown">Severity: Unknown</option>
+                        <option value="Mild">Mild</option>
+                        <option value="Moderate">Moderate</option>
+                        <option value="Severe">Severe</option>
+                      </select>
+                    </div>
+                    <input
+                      className="input bg-white text-sm py-2"
+                      value={a.reaction}
+                      onChange={e => updateListItem(setIntakeAllergies, i, 'reaction', e.target.value)}
+                      placeholder="Reaction (e.g. hives, anaphylaxis)"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => removeListItem(setIntakeAllergies, i)}
+                      className="text-xs text-red-400 hover:text-red-600 font-body flex items-center gap-1"
+                    >
+                      <Trash2 size={11} /> Remove
+                    </button>
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => addListItem(setIntakeAllergies, { name: '', reaction: '', severity: 'Unknown' })}
+                  className="flex items-center gap-1.5 text-sm text-primary font-body hover:underline"
+                >
+                  <Plus size={14} /> Add Allergy
                 </button>
               </div>
             </div>

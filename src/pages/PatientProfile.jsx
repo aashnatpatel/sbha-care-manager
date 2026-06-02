@@ -7,9 +7,10 @@ import { format, parseISO, differenceInYears, isAfter, startOfDay, startOfMonth,
 import {
   ArrowLeft, Phone, Mail, MapPin, User, Pill, Activity, Stethoscope,
   Users, Calendar, FileText, Plus, Sparkles, Trash2, Edit3, Clock,
-  Shield, X, Check, ChevronDown, ChevronUp, ChevronRight, ChevronLeft, Target, Paperclip,
-  Download, List, ListOrdered, ToggleLeft, ToggleRight, Search, CheckCircle, MoreVertical, SlidersHorizontal, ClipboardList, Printer,
+  Shield, ShieldX, X, Check, ChevronDown, ChevronUp, ChevronRight, ChevronLeft, Target, Paperclip,
+  Download, List, ListOrdered, ToggleLeft, ToggleRight, Search, CheckCircle, MoreVertical, SlidersHorizontal, ClipboardList, Printer, Square,
   File, Image, Camera,
+  Mic, MicOff, Play, Pause, Rewind, FastForward,
 } from 'lucide-react'
 import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, LevelFormat } from 'docx'
 import { saveAs } from 'file-saver'
@@ -54,6 +55,31 @@ function scheduleRowsToBlocks(rows) {
 function groupScheduleRows(rows) {
   return scheduleRowsToBlocks(rows) // same grouping logic, used for display
 }
+function formatTimer(secs) {
+  const h = Math.floor(secs / 3600)
+  const m = Math.floor((secs % 3600) / 60)
+  const s = secs % 60
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+}
+function formatDuration(secs) {
+  const h = Math.floor(secs / 3600)
+  const m = Math.floor((secs % 3600) / 60)
+  if (h > 0 && m > 0) return `${h}h ${m}m`
+  if (h > 0) return `${h}h`
+  if (m > 0) return `${m}m`
+  return '<1m'
+}
+function formatDurationFull(secs) {
+  const h = Math.floor(secs / 3600)
+  const m = Math.floor((secs % 3600) / 60)
+  const s = secs % 60
+  const parts = []
+  if (h > 0) parts.push(`${h}h`)
+  if (m > 0) parts.push(`${m}m`)
+  parts.push(`${s}s`)
+  return parts.join(' ')
+}
+
 const NOTE_TYPES = ['Call Summary', 'Appointment Note', 'Action Item', 'Family Communication', 'General', 'Other']
 const OVERWHELMING_OPTIONS = [
   'Understanding medical information',
@@ -138,6 +164,8 @@ export default function PatientProfile() {
   const [providers, setProviders] = useState([])
   const [caretakers, setCaretakers] = useState([])
   const [caretakerSchedules, setCaretakerSchedules] = useState({}) // { [caretakerId]: [{id,day,start_time,end_time}] }
+  const [caretakerVisits, setCaretakerVisits] = useState({})       // { [caretakerId]: [{id,visit_date,notes}] }
+  const [expandedVisitLogs, setExpandedVisitLogs] = useState({})
   const [emergencyContacts, setEmergencyContacts] = useState([])
   const [goals, setGoals] = useState([])
   const [appointments, setAppointments] = useState([])
@@ -145,7 +173,18 @@ export default function PatientProfile() {
   const [insurances, setInsurances] = useState([])
   const [notes, setNotes] = useState([])
   const [documents, setDocuments] = useState([])
+  const [allergies, setAllergies] = useState([])
   const [loading, setLoading] = useState(true)
+
+  // Session timer
+  const [timerRunning, setTimerRunning] = useState(false)
+  const [timerElapsed, setTimerElapsed] = useState(0)
+  const [sessionModal, setSessionModal] = useState(null) // null | { duration_seconds, date, notes }
+  const [savingSession, setSavingSession] = useState(false)
+  const timerIntervalRef = useRef(null)
+
+  // Session logs
+  const [sessionLogs, setSessionLogs] = useState([])
 
   // AI
   const [aiSummary, setAiSummary] = useState('')
@@ -173,6 +212,11 @@ export default function PatientProfile() {
   // Per-item collapsible notes
   const [expandedItemNotes, setExpandedItemNotes] = useState({})
   const [savingItemNote, setSavingItemNote] = useState(null)
+
+  // Allergies
+  const [allergyModal, setAllergyModal] = useState(null) // null | { mode: 'new'|'edit', draft, id? }
+  const [savingAllergy, setSavingAllergy] = useState(false)
+  const [allergyCollapsed, setAllergyCollapsed] = useState(true)
 
   // Notes
   const [noteModal, setNoteModal] = useState(null) // null | { mode: 'new' } | { mode: 'view', note }
@@ -238,6 +282,29 @@ export default function PatientProfile() {
 
   useEffect(() => { loadPatient() }, [id])
 
+  // Restore timer from localStorage when patient page loads
+  useEffect(() => {
+    const stored = localStorage.getItem(`sbha_session_timer_${id}`)
+    if (stored) {
+      const { startedAt } = JSON.parse(stored)
+      setTimerElapsed(Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000))
+      setTimerRunning(true)
+    }
+  }, [id])
+
+  // Tick the timer every second, computing elapsed from localStorage start time
+  useEffect(() => {
+    if (!timerRunning) { clearInterval(timerIntervalRef.current); return }
+    timerIntervalRef.current = setInterval(() => {
+      const stored = localStorage.getItem(`sbha_session_timer_${id}`)
+      if (stored) {
+        const { startedAt } = JSON.parse(stored)
+        setTimerElapsed(Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000))
+      }
+    }, 1000)
+    return () => clearInterval(timerIntervalRef.current)
+  }, [timerRunning, id])
+
   useEffect(() => {
     if (!showActionsMenu) return
     function handleClickOutside(e) {
@@ -262,7 +329,7 @@ export default function PatientProfile() {
 
   async function loadPatient() {
     setLoading(true)
-    const [p, c, m, pr, ct, ec, gl, ap, hosp, n, nd, docs, ins, pts] = await Promise.all([
+    const [p, c, m, pr, ct, ec, gl, ap, hosp, n, nd, docs, ins, pts, al, sl] = await Promise.all([
       supabase.from('patients').select('*').eq('id', id).single(),
       supabase.from('conditions').select('*').eq('patient_id', id).order('created_at'),
       supabase.from('medications').select('*').eq('patient_id', id).order('created_at'),
@@ -277,17 +344,24 @@ export default function PatientProfile() {
       supabase.from('documents').select('*').eq('patient_id', id).order('created_at', { ascending: false }),
       supabase.from('insurances').select('*').eq('patient_id', id).order('created_at'),
       supabase.from('patients').select('id, first_name, last_name').eq('status', 'active').is('deleted_at', null).order('first_name'),
+      supabase.from('allergies').select('*').eq('patient_id', id).order('created_at'),
+      supabase.from('session_logs').select('*').eq('patient_id', id).order('session_date', { ascending: false }),
     ])
     setPatient(p.data)
     setConditions(c.data || [])
+    setAllergies(al.data || [])
+    setSessionLogs(sl.data || [])
     setMedications(m.data || [])
     setProviders(pr.data || [])
     const ctData = ct.data || []
     setCaretakers(ctData)
-    // Load + migrate caretaker schedules
+    // Load + migrate caretaker schedules, and load caretaker visits
     if (ctData.length > 0) {
       const ctIds = ctData.map(x => x.id)
-      const { data: schedData } = await supabase.from('caretaker_schedules').select('*').in('caretaker_id', ctIds)
+      const [{ data: schedData }, { data: visitData }] = await Promise.all([
+        supabase.from('caretaker_schedules').select('*').in('caretaker_id', ctIds),
+        supabase.from('caretaker_visits').select('*').in('caretaker_id', ctIds).order('visit_date'),
+      ])
       const grouped = {}
       for (const s of schedData || []) {
         if (!grouped[s.caretaker_id]) grouped[s.caretaker_id] = []
@@ -309,6 +383,12 @@ export default function PatientProfile() {
         }
       }
       setCaretakerSchedules(grouped)
+      const visitGrouped = {}
+      for (const v of visitData || []) {
+        if (!visitGrouped[v.caretaker_id]) visitGrouped[v.caretaker_id] = []
+        visitGrouped[v.caretaker_id].push(v)
+      }
+      setCaretakerVisits(visitGrouped)
     }
     setEmergencyContacts(ec.data || [])
     setGoals(gl.data || [])
@@ -490,7 +570,12 @@ export default function PatientProfile() {
 
   function startEditItem(type, item) {
     if (type === 'caretakers') {
-      setEditingItem({ type, id: item.id, draft: { ...item, scheduleBlocks: scheduleRowsToBlocks(caretakerSchedules[item.id] || []) } })
+      const visits = caretakerVisits[item.id] || []
+      setEditingItem({ type, id: item.id, draft: {
+        ...item,
+        scheduleBlocks: scheduleRowsToBlocks(caretakerSchedules[item.id] || []),
+        visitDrafts: visits.map(v => ({ tempId: v.id, visit_date: v.visit_date, visit_time: v.visit_time || '', visit_end_time: v.visit_end_time || '', notes: v.notes || '' })),
+      }})
       return
     }
     setEditingItem({ type, id: item.id, draft: { ...item } })
@@ -506,14 +591,32 @@ export default function PatientProfile() {
     setCaretakerSchedules(prev => ({ ...prev, [ctId]: data || [] }))
   }
 
+  async function saveCaretakerVisits(ctId, visits) {
+    await supabase.from('caretaker_visits').delete().eq('caretaker_id', ctId)
+    const valid = (visits || []).filter(v => v.visit_date)
+    if (valid.length === 0) { setCaretakerVisits(prev => ({ ...prev, [ctId]: [] })); return }
+    const { data } = await supabase.from('caretaker_visits').insert(
+      valid.map(v => ({ caretaker_id: ctId, visit_date: v.visit_date, visit_time: v.visit_time || null, visit_end_time: v.visit_end_time || null, notes: v.notes || null }))
+    ).select()
+    setCaretakerVisits(prev => ({ ...prev, [ctId]: data || [] }))
+  }
+
   async function saveItem() {
     if (!editingItem) return
     const { type, id: itemId, draft } = editingItem
     if (type === 'caretakers') {
-      const { scheduleBlocks, schedule_days: _sd, schedule_time: _st, ...fields } = draft
+      const { scheduleBlocks, schedule_days: _sd, schedule_time: _st, visitDrafts, ...fields } = draft
+      fields.start_date = fields.start_date || null
+      fields.end_date = fields.end_date || null
       const { data } = await supabase.from('caretakers').update(fields).eq('id', itemId).select().single()
       if (data) setCaretakers(prev => prev.map(x => x.id === itemId ? data : x))
-      await saveCaretakerSchedules(itemId, scheduleBlocks)
+      if (fields.schedule_type === 'adhoc') {
+        await saveCaretakerSchedules(itemId, [])
+        await saveCaretakerVisits(itemId, visitDrafts)
+      } else {
+        await saveCaretakerSchedules(itemId, scheduleBlocks)
+        await saveCaretakerVisits(itemId, [])
+      }
       setEditingItem(null)
       return
     }
@@ -525,18 +628,27 @@ export default function PatientProfile() {
   async function deleteItem(type, itemId) {
     await supabase.from(TABLE[type]).delete().eq('id', itemId)
     SETTER[type](prev => prev.filter(x => x.id !== itemId))
-    if (type === 'caretakers') setCaretakerSchedules(prev => { const n = { ...prev }; delete n[itemId]; return n })
+    if (type === 'caretakers') {
+      setCaretakerSchedules(prev => { const n = { ...prev }; delete n[itemId]; return n })
+      setCaretakerVisits(prev => { const n = { ...prev }; delete n[itemId]; return n })
+    }
   }
 
   async function saveNewItem() {
     if (!addingItem) return
     const { type, draft } = addingItem
     if (type === 'caretakers') {
-      const { scheduleBlocks, schedule_days: _sd, schedule_time: _st, ...fields } = draft
+      const { scheduleBlocks, schedule_days: _sd, schedule_time: _st, visitDrafts, ...fields } = draft
+      fields.start_date = fields.start_date || null
+      fields.end_date = fields.end_date || null
       const { data } = await supabase.from('caretakers').insert({ patient_id: id, ...fields }).select().single()
       if (data) {
         setCaretakers(prev => [...prev, data])
-        await saveCaretakerSchedules(data.id, scheduleBlocks)
+        if (fields.schedule_type === 'adhoc') {
+          await saveCaretakerVisits(data.id, visitDrafts)
+        } else {
+          await saveCaretakerSchedules(data.id, scheduleBlocks)
+        }
       }
       setAddingItem(null)
       return
@@ -553,6 +665,25 @@ export default function PatientProfile() {
     const { data } = await supabase.from(TABLE[type]).update({ notes: text }).eq('id', item.id).select().single()
     if (data) SETTER[type](prev => prev.map(x => x.id === item.id ? data : x))
     setSavingItemNote(null)
+  }
+
+  // ── Allergies ──────────────────────────────────────────────────
+  async function saveAllergy(draft) {
+    setSavingAllergy(true)
+    if (allergyModal.mode === 'new') {
+      const { data } = await supabase.from('allergies').insert({ patient_id: id, ...draft }).select().single()
+      if (data) setAllergies(prev => [...prev, data])
+    } else {
+      const { data } = await supabase.from('allergies').update(draft).eq('id', allergyModal.id).select().single()
+      if (data) setAllergies(prev => prev.map(a => a.id === allergyModal.id ? data : a))
+    }
+    setAllergyModal(null)
+    setSavingAllergy(false)
+  }
+
+  async function deleteAllergy(allergyId) {
+    await supabase.from('allergies').delete().eq('id', allergyId)
+    setAllergies(prev => prev.filter(a => a.id !== allergyId))
   }
 
   // ── Notes ─────────────────────────────────────────────────────
@@ -639,6 +770,7 @@ export default function PatientProfile() {
         file_url: upload.path,
         file_type: file.type,
         file_size: file.size,
+        mime_type: file.type,
       })
       console.log('[uploadNoteFiles] note_attachments insert result:', { attachData, attachError })
       if (attachError) console.error('[uploadNoteFiles] note_attachments insert failed:', attachError)
@@ -958,6 +1090,184 @@ export default function PatientProfile() {
     setTimeout(() => { printWindow.print() }, 600)
   }
 
+  // ── Session Timer ─────────────────────────────────────────────
+  function startTimer() {
+    const startedAt = new Date().toISOString()
+    localStorage.setItem(`sbha_session_timer_${id}`, JSON.stringify({ startedAt }))
+    setTimerElapsed(0)
+    setTimerRunning(true)
+  }
+
+  function stopTimer() {
+    const stored = localStorage.getItem(`sbha_session_timer_${id}`)
+    const elapsed = stored
+      ? Math.floor((Date.now() - new Date(JSON.parse(stored).startedAt).getTime()) / 1000)
+      : timerElapsed
+    clearInterval(timerIntervalRef.current)
+    setTimerRunning(false)
+    localStorage.removeItem(`sbha_session_timer_${id}`)
+    setSessionModal({ duration_seconds: elapsed, date: format(new Date(), 'yyyy-MM-dd'), notes: '' })
+  }
+
+  async function saveSession(draft) {
+    setSavingSession(true)
+    const { data } = await supabase.from('session_logs').insert({
+      patient_id: id,
+      session_date: draft.date,
+      duration_seconds: draft.duration_seconds,
+      notes: draft.notes || null,
+    }).select().single()
+    if (data) setSessionLogs(prev => [data, ...prev])
+    setSessionModal(null)
+    setSavingSession(false)
+  }
+
+  async function deleteSession(sessionId) {
+    await supabase.from('session_logs').delete().eq('id', sessionId)
+    setSessionLogs(prev => prev.filter(s => s.id !== sessionId))
+  }
+
+  // ── Medication List Export ─────────────────────────────────────
+  function printMedicationList() {
+    const patientName = `${patient.first_name} ${patient.last_name}`
+    const today = format(new Date(), 'MMMM d, yyyy')
+
+    const medsHtml = medications.map(m => `
+      <div class="med-row">
+        <div class="med-name">${m.name}</div>
+        ${m.dose || m.frequency ? `<div class="med-detail"><span class="med-label">Dose &amp; Frequency:</span> ${[m.dose, m.frequency].filter(Boolean).join(' · ')}</div>` : ''}
+        ${m.notes ? `<div class="med-detail"><span class="med-label">Purpose / Instructions:</span> ${m.notes}</div>` : ''}
+        ${m.concerns ? `<div class="med-detail"><span class="med-label">Notes / Concerns:</span> ${m.concerns}</div>` : ''}
+      </div>
+    `).join('')
+
+    const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Medication List — ${patientName}</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+      color: #1f2937;
+      background: #ffffff;
+      padding: 56px 64px;
+      max-width: 760px;
+      margin: 0 auto;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      padding-bottom: 22px;
+      border-bottom: 2px solid #4F7EE0;
+      margin-bottom: 36px;
+    }
+    .header-left {}
+    .org-name {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: #4F7EE0;
+      margin-bottom: 10px;
+    }
+    .patient-name {
+      font-size: 28px;
+      font-weight: 700;
+      color: #111827;
+      letter-spacing: -0.01em;
+      margin-bottom: 3px;
+    }
+    .doc-title {
+      font-size: 14px;
+      color: #6b7280;
+      font-weight: 500;
+    }
+    .doc-date {
+      font-size: 11px;
+      color: #9ca3af;
+      text-align: right;
+      margin-top: 4px;
+    }
+    .section-label {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: #4F7EE0;
+      margin-bottom: 20px;
+    }
+    .med-row {
+      padding: 18px 0;
+      border-bottom: 1px solid #f3f4f6;
+    }
+    .med-row:last-child {
+      border-bottom: none;
+    }
+    .med-name {
+      font-size: 15px;
+      font-weight: 700;
+      color: #111827;
+      margin-bottom: 7px;
+    }
+    .med-detail {
+      font-size: 12px;
+      color: #4b5563;
+      margin-top: 4px;
+      line-height: 1.5;
+    }
+    .med-label {
+      font-weight: 600;
+      color: #374151;
+    }
+    .empty {
+      font-size: 13px;
+      color: #9ca3af;
+      font-style: italic;
+      padding: 28px 0;
+    }
+    .footer {
+      margin-top: 56px;
+      padding-top: 18px;
+      border-top: 1px solid #e5e7eb;
+      font-size: 11px;
+      color: #9ca3af;
+      text-align: center;
+    }
+    @page { margin: 0.75in; }
+    @media print { body { padding: 0; } }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="header-left">
+      <div class="org-name">South Bay Health Advocates</div>
+      <div class="patient-name">${patientName}</div>
+      <div class="doc-title">Medication List</div>
+    </div>
+    <div class="doc-date">Prepared<br>${today}</div>
+  </div>
+  <div class="section-label">Current Medications &nbsp;(${medications.length})</div>
+  ${medications.length === 0
+    ? '<div class="empty">No medications on file.</div>'
+    : medsHtml
+  }
+  <div class="footer">Prepared by South Bay Health Advocates &nbsp;|&nbsp; southbayhealthadvocates.com</div>
+</body>
+</html>`
+
+    const win = window.open('', '_blank')
+    if (!win) return
+    win.document.write(html)
+    win.document.close()
+    win.focus()
+    setTimeout(() => { win.print() }, 400)
+  }
+
   // ── AI Briefing ───────────────────────────────────────────────
   async function generateAISummary() {
     setAiLoading(true)
@@ -1168,21 +1478,50 @@ export default function PatientProfile() {
         )}
       </div>
 
-      {/* ── COLLAPSE / EXPAND ALL ── */}
-      <div className="flex items-center gap-3 mb-2">
-        <button
-          onClick={() => setCollapsedCards(Object.fromEntries(['demographics','emergency_contacts','insurance','documents','conditions','medications','care_team','caretakers','appointments','notes'].map(k => [k, true])))}
-          className="font-body text-xs text-gray-400 hover:text-gray-600 transition-colors"
-        >
-          Collapse all
-        </button>
-        <span className="text-gray-300 text-xs">·</span>
-        <button
-          onClick={() => setCollapsedCards({})}
-          className="font-body text-xs text-gray-400 hover:text-gray-600 transition-colors"
-        >
-          Expand all
-        </button>
+      {/* ── COLLAPSE / EXPAND ALL + SESSION TIMER ── */}
+      <div className="flex items-center justify-between gap-3 mb-2">
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setCollapsedCards(Object.fromEntries(['demographics','emergency_contacts','insurance','documents','conditions','medications','care_team','caretakers','appointments','notes'].map(k => [k, true])))}
+            className="font-body text-xs text-gray-400 hover:text-gray-600 transition-colors"
+          >
+            Collapse all
+          </button>
+          <span className="text-gray-300 text-xs">·</span>
+          <button
+            onClick={() => setCollapsedCards({})}
+            className="font-body text-xs text-gray-400 hover:text-gray-600 transition-colors"
+          >
+            Expand all
+          </button>
+        </div>
+
+        {/* Session Timer */}
+        <div className="flex items-center gap-2">
+          {timerRunning ? (
+            <>
+              <span className="font-body text-xs font-semibold text-primary tabular-nums">{formatTimer(timerElapsed)}</span>
+              <button
+                onClick={stopTimer}
+                className="flex items-center gap-1 text-xs font-body font-semibold text-white bg-red-500 rounded-lg px-2.5 py-1 transition-colors"
+                style={{ backgroundColor: '#ef4444' }}
+                onMouseEnter={e => e.currentTarget.style.backgroundColor = '#dc2626'}
+                onMouseLeave={e => e.currentTarget.style.backgroundColor = '#ef4444'}
+              >
+                <Square size={9} fill="currentColor" /> Stop
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={startTimer}
+              className="flex items-center gap-1.5 text-xs font-body text-gray-500 border border-gray-200 rounded-lg px-2.5 py-1 transition-all"
+              onMouseEnter={e => { e.currentTarget.style.color = '#4F7EE0'; e.currentTarget.style.borderColor = 'rgba(79,126,224,0.3)' }}
+              onMouseLeave={e => { e.currentTarget.style.color = ''; e.currentTarget.style.borderColor = '' }}
+            >
+              <Clock size={12} /> Start Session
+            </button>
+          )}
+        </div>
       </div>
 
       {/* ── THREE-COLUMN GRID ── */}
@@ -1508,7 +1847,10 @@ export default function PatientProfile() {
               </div>
               <div onClick={e => e.stopPropagation()}>
                 <button
-                  onClick={() => setAddingItem({ type: 'conditions', draft: { name: '', notes: '' } })}
+                  onClick={() => {
+                    if (collapsedCards.conditions) toggleCard('conditions')
+                    setAddingItem({ type: 'conditions', draft: { name: '', notes: '' } })
+                  }}
                   className="p-1 text-gray-300 hover:text-gray-500 transition-colors"
                 >
                   <Plus size={15} />
@@ -1569,6 +1911,70 @@ export default function PatientProfile() {
                 ))}
               </div>
             )}
+
+            {/* ── Allergies sub-section ── */}
+            <div className="mt-4 pt-4 border-t border-gray-100">
+              <div
+                className="flex items-center justify-between cursor-pointer select-none"
+                onClick={() => setAllergyCollapsed(v => !v)}
+              >
+                <div className="flex items-center gap-2">
+                  <span className="text-gray-300 flex-shrink-0">
+                    {allergyCollapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
+                  </span>
+                  <ShieldX size={13} className="text-primary" />
+                  <h4 className="font-body text-xs font-semibold text-gray-500 uppercase tracking-wider">Allergies</h4>
+                  {allergies.length > 0 && (
+                    <span className="font-body text-[10px] text-gray-400">({allergies.length})</span>
+                  )}
+                </div>
+                <div onClick={e => e.stopPropagation()}>
+                  <button
+                    onClick={() => setAllergyModal({ mode: 'new', draft: { name: '', reaction: '', severity: 'Unknown', notes: '' } })}
+                    className="p-1 text-gray-300 hover:text-gray-500 transition-colors"
+                  >
+                    <Plus size={14} />
+                  </button>
+                </div>
+              </div>
+              <div
+                className={`grid ${allergyCollapsed ? 'grid-rows-[0fr]' : 'grid-rows-[1fr]'}`}
+                style={{ transition: 'grid-template-rows 200ms ease' }}
+              >
+                <div className="overflow-hidden min-h-0">
+                  <div className="mt-3">
+                    {allergies.length === 0 ? (
+                      <p className="font-body text-xs text-gray-400">No allergies listed</p>
+                    ) : (
+                      <div className="space-y-2">
+                        {allergies.map(a => (
+                          <div key={a.id} className="flex items-start justify-between gap-2 border-b border-gray-50 pb-2 last:border-0 last:pb-0">
+                            <div className="flex flex-col gap-0.5 flex-1 min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <p className="font-body text-sm font-medium text-gray-700">{a.name}</p>
+                                <AllergyPill severity={a.severity} />
+                              </div>
+                              {a.reaction && <p className="font-body text-xs text-gray-500">{a.reaction}</p>}
+                              {a.notes && <p className="font-body text-xs text-gray-400 italic">{a.notes}</p>}
+                            </div>
+                            <div className="flex items-center gap-0.5 flex-shrink-0">
+                              <button
+                                onClick={() => setAllergyModal({ mode: 'edit', id: a.id, draft: { name: a.name, reaction: a.reaction || '', severity: a.severity || 'Unknown', notes: a.notes || '' } })}
+                                className="p-1 text-gray-300 hover:text-gray-500 transition-colors"
+                              ><Edit3 size={12} /></button>
+                              <button
+                                onClick={() => deleteAllergy(a.id)}
+                                className="p-1 text-gray-300 hover:text-red-400 transition-colors"
+                              ><Trash2 size={12} /></button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
             </div></div></div>
           </div>
 
@@ -1585,9 +1991,20 @@ export default function PatientProfile() {
                 <Pill size={15} className="text-primary" />
                 <h3 className="font-body text-xs font-semibold text-gray-500 uppercase tracking-wider">Medications</h3>
               </div>
-              <div onClick={e => e.stopPropagation()}>
+              <div className="flex items-center gap-0.5" onClick={e => e.stopPropagation()}>
                 <button
-                  onClick={() => setAddingItem({ type: 'medications', draft: { name: '', dose: '', frequency: '', concerns: '', notes: '' } })}
+                  onClick={printMedicationList}
+                  title="Export medication list"
+                  className="p-1 text-gray-300 hover:text-gray-500 transition-colors"
+                >
+                  <Download size={14} />
+                </button>
+                <button
+                  onClick={() => {
+                    console.log('[Medications +] clicked, collapsedCards.medications =', collapsedCards.medications, 'addingItem =', addingItem)
+                    if (collapsedCards.medications) toggleCard('medications')
+                    setAddingItem({ type: 'medications', draft: { name: '', dose: '', frequency: '', concerns: '' } })
+                  }}
                   className="p-1 text-gray-300 hover:text-gray-500 transition-colors"
                 >
                   <Plus size={15} />
@@ -1667,7 +2084,10 @@ export default function PatientProfile() {
           {/* Care Team */}
           <SectionCard
             title="Care Team" icon={<Stethoscope size={15} />}
-            addButton={{ onClick: () => setAddingItem({ type: 'providers', draft: { name: '', role: '', practice: '', phone: '', notes: '' } }) }}
+            addButton={{ onClick: () => {
+              console.log('[Care Team +] clicked, collapsedCards.care_team =', collapsedCards.care_team, 'addingItem =', addingItem)
+              setAddingItem({ type: 'providers', draft: { name: '', role: '', practice: '', phone: '' } })
+            }}}
             collapsed={!!collapsedCards.care_team} onToggle={() => toggleCard('care_team')}
           >
             {addingItem?.type === 'providers' && (
@@ -1734,7 +2154,7 @@ export default function PatientProfile() {
           {/* Caretakers */}
           <SectionCard
             title="Caretakers" icon={<Users size={15} />}
-            addButton={{ onClick: () => setAddingItem({ type: 'caretakers', draft: { name: '', role: '', phone: '', scheduleBlocks: [{ tempId: '0', days: [], start_time: '', end_time: '' }] } }) }}
+            addButton={{ onClick: () => setAddingItem({ type: 'caretakers', draft: { name: '', role: '', phone: '', schedule_type: 'recurring', start_date: '', end_date: '', scheduleBlocks: [{ tempId: '0', days: [], start_time: '', end_time: '' }], visitDrafts: [] } }) }}
             collapsed={!!collapsedCards.caretakers} onToggle={() => toggleCard('caretakers')}
           >
             {addingItem?.type === 'caretakers' && (
@@ -1759,35 +2179,91 @@ export default function PatientProfile() {
                     ) : (
                       <>
                         <div className="flex items-start justify-between mb-2">
-                          <div>
-                            <p className="font-body text-sm font-semibold text-gray-700">{ct.name}</p>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <p className="font-body text-sm font-semibold text-gray-700">{ct.name}</p>
+                              {ct.schedule_type !== 'adhoc' && !ct.end_date && (caretakerSchedules[ct.id] || []).length > 0 && (
+                                <span className="font-body text-[10px] font-semibold px-2 py-0.5 rounded-full bg-green-50 text-green-700 border border-green-200">Active</span>
+                              )}
+                            </div>
                             {ct.role && <span className="tag bg-primary text-white text-[10px] mt-0.5">{ct.role}</span>}
                             {ct.phone && <InfoRow icon={<Phone size={11} />} value={ct.phone} small />}
                           </div>
-                          <div className="flex items-center gap-0.5">
+                          <div className="flex items-center gap-0.5 flex-shrink-0">
                             <button onClick={() => startEditItem('caretakers', ct)} className="p-1 text-gray-300 hover:text-gray-500 transition-colors"><Edit3 size={12} /></button>
                             <button onClick={() => deleteItem('caretakers', ct.id)} className="p-1 text-gray-300 hover:text-red-400 transition-colors"><Trash2 size={12} /></button>
                           </div>
                         </div>
-                        {/* Schedule display — grouped blocks */}
-                        {(() => {
-                          const rows = caretakerSchedules[ct.id]
-                          if (!rows || rows.length === 0) return null
-                          const groups = groupScheduleRows(rows)
-                          return (
-                            <div className="mb-2 space-y-1">
-                              <p className="font-body text-[10px] text-gray-400 uppercase tracking-wide mb-1">Schedule</p>
-                              {groups.map((g, i) => (
-                                <p key={i} className="font-body text-xs text-gray-600">
-                                  <span className="font-medium">{g.days.join(', ')}</span>
-                                  {(g.start_time || g.end_time) && (
-                                    <span className="text-gray-400"> · {formatTime(g.start_time)}{g.end_time ? ` – ${formatTime(g.end_time)}` : ''}</span>
-                                  )}
-                                </p>
-                              ))}
+
+                        {ct.schedule_type === 'adhoc' ? (
+                          /* Ad-hoc visits display */
+                          <div className="mb-2">
+                            <div className="flex items-center gap-2">
+                              <p className="font-body text-xs text-gray-500">
+                                Ad-hoc visits · <span className="font-semibold text-gray-700">{(caretakerVisits[ct.id] || []).length}</span> visit{(caretakerVisits[ct.id] || []).length !== 1 ? 's' : ''} logged
+                              </p>
+                              {(caretakerVisits[ct.id] || []).length > 0 && (
+                                <button
+                                  onClick={() => setExpandedVisitLogs(p => ({ ...p, [ct.id]: !p[ct.id] }))}
+                                  className="font-body text-[10px] text-primary hover:underline transition-colors flex items-center gap-0.5"
+                                >
+                                  {expandedVisitLogs[ct.id] ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
+                                  {expandedVisitLogs[ct.id] ? 'Hide' : 'Show'}
+                                </button>
+                              )}
                             </div>
-                          )
-                        })()}
+                            {expandedVisitLogs[ct.id] && (caretakerVisits[ct.id] || []).length > 0 && (
+                              <div className="mt-2 space-y-1 pl-2 border-l-2 border-gray-100">
+                                {(caretakerVisits[ct.id] || []).map(v => (
+                                  <div key={v.id} className="font-body text-xs text-gray-600">
+                                    <span className="font-medium">{format(parseISO(v.visit_date), 'MMM d, yyyy')}</span>
+                                    {(v.visit_time || v.visit_end_time) && (
+                                      <span className="text-gray-400"> · {formatTime(v.visit_time)}{v.visit_end_time ? ` – ${formatTime(v.visit_end_time)}` : ''}</span>
+                                    )}
+                                    {v.notes && <span className="text-gray-400"> · {v.notes}</span>}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          /* Recurring schedule display */
+                          <>
+                            {(ct.start_date || ct.end_date) && (
+                              <div className="mb-2 flex items-center gap-3 flex-wrap">
+                                {ct.start_date && (
+                                  <p className="font-body text-xs text-gray-500">
+                                    Started <span className="text-gray-700">{format(parseISO(ct.start_date), 'MMM d, yyyy')}</span>
+                                  </p>
+                                )}
+                                {ct.end_date && (
+                                  <p className="font-body text-xs text-gray-500">
+                                    Ended <span className="text-gray-700">{format(parseISO(ct.end_date), 'MMM d, yyyy')}</span>
+                                  </p>
+                                )}
+                              </div>
+                            )}
+                            {(() => {
+                              const rows = caretakerSchedules[ct.id]
+                              if (!rows || rows.length === 0) return null
+                              const groups = groupScheduleRows(rows)
+                              return (
+                                <div className="mb-2 space-y-1">
+                                  <p className="font-body text-[10px] text-gray-400 uppercase tracking-wide mb-1">Schedule</p>
+                                  {groups.map((g, i) => (
+                                    <p key={i} className="font-body text-xs text-gray-600">
+                                      <span className="font-medium">{g.days.join(', ')}</span>
+                                      {(g.start_time || g.end_time) && (
+                                        <span className="text-gray-400"> · {formatTime(g.start_time)}{g.end_time ? ` – ${formatTime(g.end_time)}` : ''}</span>
+                                      )}
+                                    </p>
+                                  ))}
+                                </div>
+                              )
+                            })()}
+                          </>
+                        )}
+
                         <ItemNotesField
                           itemKey={`caretakers-${ct.id}`}
                           notes={ct.notes || ''}
@@ -2238,6 +2714,61 @@ export default function PatientProfile() {
             </div></div></div>
           </div>
 
+          {/* Session History */}
+          <div className="card p-0">
+            <div
+              className="flex items-center justify-between px-6 pt-5 pb-4 cursor-pointer select-none"
+              onClick={() => toggleCard('session_history')}
+            >
+              <div className="flex items-center gap-2">
+                <span className="text-gray-300 flex-shrink-0">
+                  {collapsedCards.session_history ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
+                </span>
+                <Clock size={15} className="text-primary" />
+                <h3 className="font-body text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                  Session History
+                  {sessionLogs.length > 0 && (
+                    <span className="ml-1 font-normal normal-case tracking-normal text-gray-400">
+                      · {formatDuration(sessionLogs.reduce((sum, s) => sum + s.duration_seconds, 0))} total
+                    </span>
+                  )}
+                </h3>
+              </div>
+            </div>
+            <div
+              className={`grid ${collapsedCards.session_history ? 'grid-rows-[0fr]' : 'grid-rows-[1fr]'}`}
+              style={{ transition: 'grid-template-rows 200ms ease' }}
+            >
+              <div className="overflow-hidden min-h-0">
+                <div className="px-6 pb-6">
+                  {sessionLogs.length === 0 ? (
+                    <p className="font-body text-xs text-gray-400">No sessions logged yet</p>
+                  ) : (
+                    <div className="space-y-3">
+                      {sessionLogs.map(s => (
+                        <div key={s.id} className="flex items-start justify-between gap-2 border-b border-gray-50 pb-3 last:border-0 last:pb-0">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-body text-xs font-semibold text-gray-700">{format(parseISO(s.session_date), 'MMM d, yyyy')}</span>
+                              <span className="font-body text-xs font-semibold text-primary">{formatDuration(s.duration_seconds)}</span>
+                            </div>
+                            {s.notes && <p className="font-body text-xs text-gray-400 mt-0.5 line-clamp-2">{s.notes}</p>}
+                          </div>
+                          <button
+                            onClick={() => deleteSession(s.id)}
+                            className="p-1 text-gray-300 hover:text-red-400 transition-colors flex-shrink-0"
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+
         </div>
       </div>
 
@@ -2590,6 +3121,26 @@ export default function PatientProfile() {
         </div>
       )}
 
+      {/* ── SESSION SAVE MODAL ── */}
+      {sessionModal && (
+        <SessionSaveModal
+          modal={sessionModal}
+          saving={savingSession}
+          onClose={() => setSessionModal(null)}
+          onSave={saveSession}
+        />
+      )}
+
+      {/* ── ALLERGY MODAL ── */}
+      {allergyModal && (
+        <AllergyModal
+          modal={allergyModal}
+          saving={savingAllergy}
+          onClose={() => setAllergyModal(null)}
+          onSave={saveAllergy}
+        />
+      )}
+
       {/* ── DELETE PATIENT CONFIRMATION ── */}
       {showDeleteConfirm && (
         <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center p-0 sm:p-4">
@@ -2639,7 +3190,13 @@ function SectionCard({ title, icon, children, accentColor = 'primary', onEdit, e
         </div>
         <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
           {addButton && !editing && (
-            <button onClick={addButton.onClick} className="p-1.5 text-gray-300 hover:text-gray-500 transition-colors">
+            <button
+              onClick={() => {
+                if (collapsed && onToggle) onToggle()
+                addButton.onClick()
+              }}
+              className="p-1.5 text-gray-300 hover:text-gray-500 transition-colors"
+            >
               <Plus size={14} />
             </button>
           )}
@@ -2778,27 +3335,32 @@ function ItemForm({ fields, draft, onChange, onSave, onCancel }) {
 }
 
 function CaretakerForm({ draft, onChange, onSave, onCancel }) {
+  const scheduleType = draft.schedule_type || 'recurring'
   const blocks = draft.scheduleBlocks || [{ tempId: '0', days: [], start_time: '', end_time: '' }]
+  const visitDrafts = draft.visitDrafts || []
 
-  function setBlocks(newBlocks) {
-    onChange({ ...draft, scheduleBlocks: newBlocks })
-  }
-  function addBlock() {
-    setBlocks([...blocks, { tempId: Date.now().toString(), days: [], start_time: '', end_time: '' }])
-  }
-  function removeBlock(idx) {
-    setBlocks(blocks.filter((_, i) => i !== idx))
-  }
-  function updateBlock(idx, update) {
-    setBlocks(blocks.map((b, i) => i === idx ? { ...b, ...update } : b))
-  }
+  function setBlocks(newBlocks) { onChange({ ...draft, scheduleBlocks: newBlocks }) }
+  function addBlock() { setBlocks([...blocks, { tempId: Date.now().toString(), days: [], start_time: '', end_time: '' }]) }
+  function removeBlock(idx) { setBlocks(blocks.filter((_, i) => i !== idx)) }
+  function updateBlock(idx, update) { setBlocks(blocks.map((b, i) => i === idx ? { ...b, ...update } : b)) }
   function toggleBlockDay(idx, day) {
     const days = blocks[idx].days || []
     updateBlock(idx, { days: days.includes(day) ? days.filter(d => d !== day) : [...days, day] })
   }
 
+  function addVisit() {
+    onChange({ ...draft, visitDrafts: [...visitDrafts, { tempId: Date.now().toString(), visit_date: '', visit_time: '', visit_end_time: '', notes: '' }] })
+  }
+  function updateVisit(idx, field, value) {
+    onChange({ ...draft, visitDrafts: visitDrafts.map((v, i) => i === idx ? { ...v, [field]: value } : v) })
+  }
+  function removeVisit(idx) {
+    onChange({ ...draft, visitDrafts: visitDrafts.filter((_, i) => i !== idx) })
+  }
+
   return (
     <div className="border border-dashed border-primary/30 rounded-xl p-3 space-y-2.5 mb-3 bg-primary-light/20">
+      {/* Name / Role / Phone */}
       <div>
         <label className="label">Name *</label>
         <input className="input text-xs" value={draft.name || ''} onChange={e => onChange({ ...draft, name: e.target.value })} />
@@ -2812,63 +3374,147 @@ function CaretakerForm({ draft, onChange, onSave, onCancel }) {
         <input className="input text-xs" value={draft.phone || ''} onChange={e => onChange({ ...draft, phone: e.target.value })} />
       </div>
 
-      {/* Schedule blocks */}
+      {/* Schedule type toggle */}
       <div>
-        <label className="label">Schedule</label>
-        <div className="space-y-2 mt-1">
-          {blocks.map((block, idx) => (
-            <div key={block.tempId} className="bg-white rounded-lg p-2.5 border border-gray-100 space-y-2">
-              {/* Day toggles */}
-              <div className="flex gap-1">
-                {DAYS.map(day => (
-                  <button
-                    key={day}
-                    type="button"
-                    onClick={() => toggleBlockDay(idx, day)}
-                    className={`flex-1 text-center rounded-md py-1.5 text-[10px] font-body font-semibold transition-colors ${
-                      (block.days || []).includes(day) ? 'bg-primary text-white' : 'bg-gray-100 text-gray-400 hover:bg-gray-200'
-                    }`}
-                  >
-                    {day[0]}
-                  </button>
-                ))}
-              </div>
-              {/* Time range */}
-              <div className="flex items-center gap-1.5">
-                <input
-                  type="time"
-                  className="input text-xs flex-1"
-                  value={block.start_time || ''}
-                  onChange={e => updateBlock(idx, { start_time: e.target.value })}
-                />
-                <span className="text-gray-400 text-xs flex-shrink-0">–</span>
-                <input
-                  type="time"
-                  className="input text-xs flex-1"
-                  value={block.end_time || ''}
-                  onChange={e => updateBlock(idx, { end_time: e.target.value })}
-                />
-                {blocks.length > 1 && (
-                  <button
-                    type="button"
-                    onClick={() => removeBlock(idx)}
-                    className="p-1 text-gray-300 hover:text-red-400 transition-colors flex-shrink-0"
-                  >
-                    <X size={12} />
-                  </button>
-                )}
-              </div>
-            </div>
-          ))}
+        <label className="label">Schedule Type</label>
+        <div className="flex rounded-lg overflow-hidden border border-gray-200 mt-1">
           <button
             type="button"
-            onClick={addBlock}
-            className="flex items-center gap-1 text-xs font-body text-primary hover:underline"
+            onClick={() => onChange({ ...draft, schedule_type: 'recurring' })}
+            className={`flex-1 py-1.5 text-[11px] font-body font-semibold transition-colors ${scheduleType === 'recurring' ? 'bg-primary text-white' : 'bg-white text-gray-500'}`}
           >
-            <Plus size={11} /> Add another block
+            Recurring Schedule
+          </button>
+          <button
+            type="button"
+            onClick={() => onChange({ ...draft, schedule_type: 'adhoc' })}
+            className={`flex-1 py-1.5 text-[11px] font-body font-semibold transition-colors ${scheduleType === 'adhoc' ? 'bg-primary text-white' : 'bg-white text-gray-500'}`}
+          >
+            Ad-hoc Visits
           </button>
         </div>
       </div>
+
+      {scheduleType === 'recurring' && (
+        <>
+          {/* Start / End dates */}
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="label">Started on</label>
+              <input
+                type="date"
+                className="input text-xs"
+                value={draft.start_date || ''}
+                onChange={e => onChange({ ...draft, start_date: e.target.value })}
+              />
+            </div>
+            <div>
+              <label className="label">Ended on</label>
+              <input
+                type="date"
+                className="input text-xs"
+                value={draft.end_date || ''}
+                onChange={e => onChange({ ...draft, end_date: e.target.value })}
+              />
+              <p className="font-body text-[10px] text-gray-400 mt-0.5">Leave blank if still active</p>
+            </div>
+          </div>
+
+          {/* Weekly schedule blocks */}
+          <div>
+            <label className="label">Weekly Schedule</label>
+            <div className="space-y-2 mt-1">
+              {blocks.map((block, idx) => (
+                <div key={block.tempId} className="bg-white rounded-lg p-2.5 border border-gray-100 space-y-2">
+                  <div className="flex gap-1">
+                    {DAYS.map(day => (
+                      <button
+                        key={day}
+                        type="button"
+                        onClick={() => toggleBlockDay(idx, day)}
+                        className={`flex-1 text-center rounded-md py-1.5 text-[10px] font-body font-semibold transition-colors ${
+                          (block.days || []).includes(day) ? 'bg-primary text-white' : 'bg-gray-100 text-gray-400'
+                        }`}
+                      >
+                        {day[0]}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <input type="time" className="input text-xs flex-1" value={block.start_time || ''} onChange={e => updateBlock(idx, { start_time: e.target.value })} />
+                    <span className="text-gray-400 text-xs flex-shrink-0">–</span>
+                    <input type="time" className="input text-xs flex-1" value={block.end_time || ''} onChange={e => updateBlock(idx, { end_time: e.target.value })} />
+                    {blocks.length > 1 && (
+                      <button type="button" onClick={() => removeBlock(idx)} className="p-1 text-gray-300 hover:text-red-400 transition-colors flex-shrink-0">
+                        <X size={12} />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+              <button type="button" onClick={addBlock} className="flex items-center gap-1 text-xs font-body text-primary hover:underline">
+                <Plus size={11} /> Add another block
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {scheduleType === 'adhoc' && (
+        <div>
+          <label className="label">Visit Log</label>
+          <div className="space-y-2 mt-1">
+            {visitDrafts.map((v, idx) => (
+              <div key={v.tempId} className="bg-white rounded-lg p-2.5 border border-gray-100 space-y-1.5">
+                <div className="flex items-center gap-2">
+                  <input
+                    type="date"
+                    className="input text-xs flex-1"
+                    value={v.visit_date || ''}
+                    onChange={e => updateVisit(idx, 'visit_date', e.target.value)}
+                  />
+                  <button type="button" onClick={() => removeVisit(idx)} className="p-1 text-gray-300 hover:text-red-400 transition-colors flex-shrink-0">
+                    <X size={12} />
+                  </button>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <div className="flex-1">
+                    <label className="label text-[10px]">Start Time</label>
+                    <input
+                      type="time"
+                      className="input text-xs"
+                      value={v.visit_time || ''}
+                      onChange={e => updateVisit(idx, 'visit_time', e.target.value)}
+                    />
+                  </div>
+                  <span className="text-gray-400 text-xs mt-4 flex-shrink-0">–</span>
+                  <div className="flex-1">
+                    <label className="label text-[10px]">End Time</label>
+                    <input
+                      type="time"
+                      className="input text-xs"
+                      value={v.visit_end_time || ''}
+                      onChange={e => updateVisit(idx, 'visit_end_time', e.target.value)}
+                    />
+                  </div>
+                </div>
+                <input
+                  className="input text-xs"
+                  placeholder="Notes (optional)"
+                  value={v.notes || ''}
+                  onChange={e => updateVisit(idx, 'notes', e.target.value)}
+                />
+              </div>
+            ))}
+            {visitDrafts.length === 0 && (
+              <p className="font-body text-xs text-gray-400">No visits logged yet.</p>
+            )}
+            <button type="button" onClick={addVisit} className="flex items-center gap-1 text-xs font-body text-primary hover:underline">
+              <Plus size={11} /> Add Visit Date
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="flex gap-2 pt-1">
         <button onClick={onSave} className="btn-primary flex-1 py-1.5 text-xs">Save</button>
@@ -3358,6 +4004,144 @@ function AppointmentModal({ modal, onClose, onSave, onDelete, saving }) {
 // ── NoteModal ─────────────────────────────────────────────────────────────────
 const INSURANCE_TYPES_LIST = ['Medicare', 'Medicaid', 'Medicare + Medicaid', 'Private Insurance', 'Uninsured']
 
+function SessionSaveModal({ modal, onClose, onSave, saving }) {
+  const [draft, setDraft] = useState({ ...modal })
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+      <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" />
+      <div className="relative bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl w-full sm:max-w-md flex flex-col overflow-hidden max-h-[95vh] sm:max-h-none">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 flex-shrink-0">
+          <h2 className="font-heading text-xl font-semibold text-gray-800">Save Session</h2>
+          <button onClick={onClose} className="p-1.5 text-gray-400 hover:text-gray-600 transition-colors"><X size={18} /></button>
+        </div>
+        <div className="px-6 pt-5 pb-20 sm:pb-5 space-y-4 overflow-y-auto flex-1">
+          <div className="flex justify-center">
+            <div className="bg-primary-light rounded-xl px-8 py-4 text-center">
+              <p className="font-body text-xs text-gray-500 mb-1 uppercase tracking-wide">Session Duration</p>
+              <p className="font-heading text-4xl text-primary font-semibold">{formatDurationFull(draft.duration_seconds)}</p>
+            </div>
+          </div>
+          <div>
+            <label className="label">Date</label>
+            <input
+              type="date"
+              className="input"
+              value={draft.date}
+              onChange={e => setDraft(d => ({ ...d, date: e.target.value }))}
+            />
+          </div>
+          <div>
+            <label className="label">Notes (optional)</label>
+            <textarea
+              className="input resize-none"
+              rows={3}
+              placeholder="What was discussed or worked on during this session?"
+              value={draft.notes}
+              onChange={e => setDraft(d => ({ ...d, notes: e.target.value }))}
+            />
+          </div>
+        </div>
+        <div className="flex gap-2 px-6 pt-4 pb-6 sm:py-4 border-t border-gray-100 flex-shrink-0">
+          <button onClick={onClose} className="btn-ghost flex-1 py-2 text-sm">Discard</button>
+          <button
+            onClick={() => onSave(draft)}
+            disabled={saving}
+            className="btn-primary flex-1 py-2 text-sm disabled:opacity-50"
+          >
+            {saving ? 'Saving…' : 'Save Session'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function AllergyPill({ severity }) {
+  const styles = {
+    Mild:     'bg-yellow-50 text-yellow-700 border border-yellow-200',
+    Moderate: 'bg-orange-50 text-orange-600 border border-orange-200',
+    Severe:   'bg-red-50 text-red-600 border border-red-200',
+    Unknown:  'bg-gray-100 text-gray-500 border border-gray-200',
+  }
+  return (
+    <span className={`font-body text-[10px] font-semibold px-2 py-0.5 rounded-full ${styles[severity] || styles.Unknown}`}>
+      {severity || 'Unknown'}
+    </span>
+  )
+}
+
+function AllergyModal({ modal, onClose, onSave, saving }) {
+  const [draft, setDraft] = useState({ ...modal.draft })
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+      <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" />
+      <div className="relative bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl w-full sm:max-w-md flex flex-col overflow-hidden max-h-[95vh] sm:max-h-none">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 flex-shrink-0">
+          <h2 className="font-heading text-xl font-semibold text-gray-800">
+            {modal.mode === 'new' ? 'Add Allergy' : 'Edit Allergy'}
+          </h2>
+          <button onClick={onClose} className="p-1.5 text-gray-400 hover:text-gray-600 transition-colors"><X size={18} /></button>
+        </div>
+        <div className="px-6 pt-5 pb-20 sm:pb-5 space-y-4 overflow-y-auto flex-1">
+          <div>
+            <label className="label">Allergy Name *</label>
+            <input
+              className="input"
+              placeholder="e.g. Penicillin, Peanuts, Latex"
+              value={draft.name}
+              onChange={e => setDraft(d => ({ ...d, name: e.target.value }))}
+            />
+          </div>
+          <div>
+            <label className="label">Reaction</label>
+            <input
+              className="input"
+              placeholder="e.g. Hives, anaphylaxis, rash"
+              value={draft.reaction}
+              onChange={e => setDraft(d => ({ ...d, reaction: e.target.value }))}
+            />
+          </div>
+          <div>
+            <label className="label">Severity</label>
+            <select
+              className="input"
+              value={draft.severity}
+              onChange={e => setDraft(d => ({ ...d, severity: e.target.value }))}
+            >
+              <option value="Unknown">Unknown</option>
+              <option value="Mild">Mild</option>
+              <option value="Moderate">Moderate</option>
+              <option value="Severe">Severe</option>
+            </select>
+          </div>
+          <div>
+            <label className="label">Notes</label>
+            <textarea
+              className="input resize-none"
+              rows={3}
+              placeholder="Any additional notes…"
+              value={draft.notes}
+              onChange={e => setDraft(d => ({ ...d, notes: e.target.value }))}
+            />
+          </div>
+        </div>
+        <div className="flex gap-2 px-6 pt-4 pb-6 sm:py-4 border-t border-gray-100 flex-shrink-0">
+          <button onClick={onClose} className="btn-ghost flex-1 py-2 text-sm">Cancel</button>
+          <button
+            onClick={() => onSave(draft)}
+            disabled={saving || !draft.name.trim()}
+            className="btn-primary flex-1 py-2 text-sm disabled:opacity-50"
+          >
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function InsuranceModal({ modal, onClose, onSave, saving }) {
   const isOtherInit = !!modal.draft.insurance_type && !INSURANCE_TYPES_LIST.includes(modal.draft.insurance_type)
   const [draft, setDraft] = useState({ ...modal.draft })
@@ -3449,6 +4233,212 @@ function InsuranceModal({ modal, onClose, onSave, saving }) {
   )
 }
 
+function audioExtFromMime(mimeType) {
+  if (!mimeType) return 'webm'
+  if (mimeType.includes('mp4') || mimeType.includes('m4a')) return 'm4a'
+  if (mimeType.includes('ogg')) return 'ogg'
+  return 'webm'
+}
+
+function AudioPlayer({ src, name }) {
+  const audioRef = useRef(null)
+  const [playing, setPlaying] = useState(false)
+  const [currentTime, setCurrentTime] = useState(0)
+  const [duration, setDuration] = useState(0)
+  const [speed, setSpeed] = useState(1)
+
+  useEffect(() => {
+    const audio = audioRef.current
+    if (!audio) return
+    const onTime = () => setCurrentTime(audio.currentTime)
+    const onMeta = () => { if (isFinite(audio.duration)) setDuration(audio.duration) }
+    const onEnd = () => setPlaying(false)
+    audio.addEventListener('timeupdate', onTime)
+    audio.addEventListener('loadedmetadata', onMeta)
+    audio.addEventListener('durationchange', onMeta)
+    audio.addEventListener('ended', onEnd)
+    return () => {
+      audio.removeEventListener('timeupdate', onTime)
+      audio.removeEventListener('loadedmetadata', onMeta)
+      audio.removeEventListener('durationchange', onMeta)
+      audio.removeEventListener('ended', onEnd)
+    }
+  }, [src])
+
+  function togglePlay() {
+    const audio = audioRef.current
+    if (!audio) return
+    if (playing) { audio.pause(); setPlaying(false) }
+    else { audio.play(); setPlaying(true) }
+  }
+
+  function seek(e) {
+    const audio = audioRef.current
+    if (!audio) return
+    audio.currentTime = Number(e.target.value)
+  }
+
+  function skip(secs) {
+    const audio = audioRef.current
+    if (!audio) return
+    audio.currentTime = Math.max(0, Math.min(duration || 0, audio.currentTime + secs))
+  }
+
+  function changeSpeed(s) {
+    const audio = audioRef.current
+    if (!audio) return
+    setSpeed(s)
+    audio.playbackRate = s
+  }
+
+  function fmtTime(s) {
+    if (!s || !isFinite(s)) return '0:00'
+    const m = Math.floor(s / 60)
+    const sec = Math.floor(s % 60)
+    return `${m}:${sec.toString().padStart(2, '0')}`
+  }
+
+  return (
+    <div className="px-3 py-2.5 bg-primary-light rounded-lg border border-primary/20 space-y-2">
+      <audio ref={audioRef} src={src} preload="metadata" />
+      {name && (
+        <p className="font-body text-xs font-medium text-primary truncate flex items-center gap-1.5">
+          <Mic size={11} /> {name}
+        </p>
+      )}
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => skip(-10)}
+          className="p-1 text-primary hover:text-primary/70 flex-shrink-0 transition-colors"
+          title="Back 10 seconds"
+        >
+          <Rewind size={13} />
+        </button>
+        <button
+          onClick={togglePlay}
+          className="w-7 h-7 rounded-full bg-primary text-white flex items-center justify-center flex-shrink-0 hover:bg-primary/80 transition-colors"
+        >
+          {playing ? <Pause size={11} /> : <Play size={11} />}
+        </button>
+        <button
+          onClick={() => skip(10)}
+          className="p-1 text-primary hover:text-primary/70 flex-shrink-0 transition-colors"
+          title="Forward 10 seconds"
+        >
+          <FastForward size={13} />
+        </button>
+        <input
+          type="range"
+          min={0}
+          max={duration || 0}
+          step={0.5}
+          value={currentTime}
+          onChange={seek}
+          className="flex-1 h-1 cursor-pointer"
+          style={{ accentColor: '#4F7EE0' }}
+        />
+        <span className="font-body text-xs text-gray-500 flex-shrink-0 tabular-nums">
+          {fmtTime(currentTime)} / {fmtTime(duration)}
+        </span>
+      </div>
+      <div className="flex items-center justify-end">
+        <select
+          value={speed}
+          onChange={e => changeSpeed(Number(e.target.value))}
+          className="font-body text-xs text-primary bg-transparent border border-primary/20 rounded px-1.5 py-0.5"
+        >
+          {[0.5, 1, 1.25, 1.5, 2].map(s => <option key={s} value={s}>{s}x</option>)}
+        </select>
+      </div>
+    </div>
+  )
+}
+
+function PendingAudioItem({ file, onRemove }) {
+  const [url, setUrl] = useState(null)
+  useEffect(() => {
+    const u = URL.createObjectURL(file)
+    setUrl(u)
+    return () => URL.revokeObjectURL(u)
+  }, [file])
+  if (!url) return null
+  return (
+    <div className="relative">
+      <AudioPlayer src={url} name={file.name} />
+      <button
+        onClick={onRemove}
+        className="absolute top-2 right-2 p-0.5 text-primary/60 hover:text-primary transition-colors"
+        title="Remove recording"
+      >
+        <X size={12} />
+      </button>
+    </div>
+  )
+}
+
+function StoredAudioItem({ attach, onDelete, deleting, downloadFilename }) {
+  const [url, setUrl] = useState(null)
+  const [downloading, setDownloading] = useState(false)
+
+  useEffect(() => {
+    supabase.storage.from('documents').createSignedUrl(attach.file_url, 3600)
+      .then(({ data }) => { if (data?.signedUrl) setUrl(data.signedUrl) })
+  }, [attach.file_url])
+
+  async function handleDownload() {
+    if (!url || downloading) return
+    setDownloading(true)
+    try {
+      const res = await fetch(url)
+      const blob = await res.blob()
+      const objectUrl = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = objectUrl
+      link.download = downloadFilename || attach.name
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      URL.revokeObjectURL(objectUrl)
+    } finally {
+      setDownloading(false)
+    }
+  }
+
+  return (
+    <div className="space-y-1">
+      {url ? (
+        <AudioPlayer src={url} name={attach.name} />
+      ) : (
+        <div className="px-3 py-2.5 bg-primary-light rounded-lg border border-primary/20 flex items-center gap-2">
+          <Mic size={12} className="text-primary" />
+          <span className="font-body text-xs text-primary flex-1 truncate">{attach.name}</span>
+          <span className="font-body text-xs text-gray-400">Loading…</span>
+        </div>
+      )}
+      <div className="flex items-center gap-1.5 px-1">
+        {downloadFilename && url && (
+          <button
+            onClick={handleDownload}
+            disabled={downloading}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg font-body text-xs font-medium text-gray-500 bg-gray-50 hover:bg-gray-100 border border-gray-200 transition-colors disabled:opacity-50"
+          >
+            <Download size={11} /> {downloading ? 'Downloading…' : 'Download'}
+          </button>
+        )}
+        {onDelete && (
+          <button
+            onClick={onDelete}
+            disabled={deleting}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg font-body text-xs font-medium text-red-400 bg-red-50 hover:bg-red-100 border border-red-100 transition-colors disabled:opacity-50"
+          >
+            <X size={11} /> {deleting ? 'Deleting…' : 'Delete'}
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function NoteModal({ modal, patientId, patientName, onClose, onSave, onUpdate, onDelete, saving }) {
   const isNew = modal.mode === 'new'
   const note = modal.note || null
@@ -3470,6 +4460,12 @@ function NoteModal({ modal, patientId, patientName, onClose, onSave, onUpdate, o
   const [attachments, setAttachments] = useState([])
   const [deletingAttachId, setDeletingAttachId] = useState(null)
   const [previewAttach, setPreviewAttach] = useState(null)
+  const [isRecording, setIsRecording] = useState(false)
+  const [recordingElapsed, setRecordingElapsed] = useState(0)
+  const [micError, setMicError] = useState(null)
+  const mediaRecorderRef = useRef(null)
+  const audioChunksRef = useRef([])
+  const recordingTimerRef = useRef(null)
 
   // Escape to close
   useEffect(() => {
@@ -3484,6 +4480,16 @@ function NoteModal({ modal, patientId, patientName, onClose, onSave, onUpdate, o
         .then(({ data }) => setAttachments(data || []))
     }
   }, [note?.id])
+
+  // Stop recording and clean up if modal is closed mid-recording
+  useEffect(() => {
+    return () => {
+      if (mediaRecorderRef.current) {
+        try { mediaRecorderRef.current.stop() } catch (e) {}
+      }
+      clearInterval(recordingTimerRef.current)
+    }
+  }, [])
 
   async function openAttachment(attach) {
     const isPDF = attach.file_type === 'application/pdf' || attach.name?.toLowerCase().endsWith('.pdf')
@@ -3517,6 +4523,57 @@ function NoteModal({ modal, patientId, patientName, onClose, onSave, onUpdate, o
     setNoteDate((note.note_date || today).slice(0, 10))
     setNoteBody(note.body || '')
     setMode('edit')
+  }
+
+  function fmtRec(s) {
+    const m = Math.floor(s / 60)
+    const sec = s % 60
+    return `${m}:${sec.toString().padStart(2, '0')}`
+  }
+
+  async function startRecording() {
+    setMicError(null)
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setMicError('Audio recording is not supported in this browser.')
+      return
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      audioChunksRef.current = []
+      const MIME_PRIORITY = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/webm']
+      const mimeType = MIME_PRIORITY.find(t => MediaRecorder.isTypeSupported(t)) || ''
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined)
+      recorder.ondataavailable = e => { if (e.data.size > 0) audioChunksRef.current.push(e.data) }
+      recorder.onstop = () => {
+        const recMime = recorder.mimeType || mimeType || 'audio/webm'
+        const ext = audioExtFromMime(recMime)
+        const blob = new Blob(audioChunksRef.current, { type: recMime })
+        const file = new window.File([blob], `recording-${Date.now()}.${ext}`, { type: recMime })
+        setPendingFiles(prev => [...prev, file])
+        stream.getTracks().forEach(t => t.stop())
+      }
+      recorder.start()
+      mediaRecorderRef.current = recorder
+      setIsRecording(true)
+      setRecordingElapsed(0)
+      recordingTimerRef.current = setInterval(() => setRecordingElapsed(e => e + 1), 1000)
+    } catch (err) {
+      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+        setMicError('Microphone access was denied. Please allow microphone access in your browser settings and try again.')
+      } else {
+        setMicError('Could not start recording: ' + err.message)
+      }
+    }
+  }
+
+  function stopRecording() {
+    if (mediaRecorderRef.current) {
+      try { mediaRecorderRef.current.stop() } catch (e) {}
+      mediaRecorderRef.current = null
+    }
+    clearInterval(recordingTimerRef.current)
+    setIsRecording(false)
+    setRecordingElapsed(0)
   }
 
   function handleSave() {
@@ -3794,8 +4851,10 @@ function NoteModal({ modal, patientId, patientName, onClose, onSave, onUpdate, o
               {attachments.length > 0 && (
                 <div className="mt-6 pt-5 border-t border-gray-200">
                   <p className="font-body text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Attachments</p>
-                  <div className="space-y-1">
+                  <div className="space-y-2">
                     {attachments.map(a => {
+                      const isAudio = a.file_type?.startsWith('audio/')
+                      if (isAudio) return <StoredAudioItem key={a.id} attach={a} downloadFilename={`${patientName} - ${note?.title || 'Note'} - recording.${audioExtFromMime(a.mime_type || a.file_type)}`} />
                       const isPDF = a.file_type === 'application/pdf' || a.name?.toLowerCase().endsWith('.pdf')
                       const isImage = a.file_type?.startsWith('image/')
                       const canPreview = isPDF || isImage
@@ -3870,26 +4929,78 @@ function NoteModal({ modal, patientId, patientName, onClose, onSave, onUpdate, o
               </Field>
               <Field label="Attachments">
                 <div className="space-y-1.5">
-                  {!isNew && attachments.map(a => (
-                    <div key={a.id} className="flex items-center gap-2 px-3 py-2 bg-gray-50 rounded-lg">
-                      <Paperclip size={12} className="text-gray-400 flex-shrink-0" />
-                      <span className="font-body text-xs text-gray-600 flex-1 truncate">{a.name}</span>
-                      <button onClick={() => deleteAttachment(a)} disabled={deletingAttachId === a.id}
-                        className="text-red-400 hover:text-red-600 p-0.5 flex-shrink-0 disabled:opacity-50">
-                        <X size={13} />
+                  {!isNew && attachments.map(a => {
+                    const isAudio = a.file_type?.startsWith('audio/')
+                    if (isAudio) return (
+                      <StoredAudioItem
+                        key={a.id}
+                        attach={a}
+                        onDelete={() => deleteAttachment(a)}
+                        deleting={deletingAttachId === a.id}
+                      />
+                    )
+                    return (
+                      <div key={a.id} className="flex items-center gap-2 px-3 py-2 bg-gray-50 rounded-lg">
+                        <Paperclip size={12} className="text-gray-400 flex-shrink-0" />
+                        <span className="font-body text-xs text-gray-600 flex-1 truncate">{a.name}</span>
+                        <button onClick={() => deleteAttachment(a)} disabled={deletingAttachId === a.id}
+                          className="text-red-400 hover:text-red-600 p-0.5 flex-shrink-0 disabled:opacity-50">
+                          <X size={13} />
+                        </button>
+                      </div>
+                    )
+                  })}
+                  {pendingFiles.map((f, i) => {
+                    const isAudio = f.type?.startsWith('audio/')
+                    if (isAudio) return (
+                      <PendingAudioItem
+                        key={i}
+                        file={f}
+                        onRemove={() => setPendingFiles(prev => prev.filter((_, j) => j !== i))}
+                      />
+                    )
+                    return (
+                      <div key={i} className="flex items-center gap-2 px-3 py-2 bg-primary-light rounded-lg">
+                        <Paperclip size={12} className="text-primary flex-shrink-0" />
+                        <span className="font-body text-xs text-primary flex-1 truncate">{f.name}</span>
+                        <button onClick={() => setPendingFiles(prev => prev.filter((_, j) => j !== i))}
+                          className="text-primary/60 hover:text-primary p-0.5 flex-shrink-0">
+                          <X size={13} />
+                        </button>
+                      </div>
+                    )
+                  })}
+
+                  {/* Recording indicator or Record button */}
+                  {isRecording ? (
+                    <div className="flex items-center gap-2.5 px-3 py-2 bg-red-50 rounded-lg border border-red-200">
+                      <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse flex-shrink-0" />
+                      <span className="font-body text-xs font-medium text-red-600 flex-1">Recording… {fmtRec(recordingElapsed)}</span>
+                      <button
+                        type="button"
+                        onClick={stopRecording}
+                        className="flex items-center gap-1 px-2.5 py-1 bg-red-500 text-white rounded-md font-body text-xs font-medium hover:bg-red-600 transition-colors flex-shrink-0"
+                      >
+                        <Square size={10} fill="white" /> Stop
                       </button>
                     </div>
-                  ))}
-                  {pendingFiles.map((f, i) => (
-                    <div key={i} className="flex items-center gap-2 px-3 py-2 bg-primary-light rounded-lg">
-                      <Paperclip size={12} className="text-primary flex-shrink-0" />
-                      <span className="font-body text-xs text-primary flex-1 truncate">{f.name}</span>
-                      <button onClick={() => setPendingFiles(prev => prev.filter((_, j) => j !== i))}
-                        className="text-primary/60 hover:text-primary p-0.5 flex-shrink-0">
-                        <X size={13} />
-                      </button>
-                    </div>
-                  ))}
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={startRecording}
+                      className="flex items-center gap-2 cursor-pointer px-3 py-2 border border-dashed border-gray-300 rounded-lg hover:border-primary/50 transition-colors w-full"
+                    >
+                      <Mic size={13} className="text-gray-400" />
+                      <span className="font-body text-xs text-gray-500">Record audio</span>
+                    </button>
+                  )}
+
+                  {micError && (
+                    <p className="font-body text-xs text-red-500 flex items-start gap-1.5">
+                      <MicOff size={11} className="flex-shrink-0 mt-0.5" /> {micError}
+                    </p>
+                  )}
+
                   <label className="flex items-center gap-2 cursor-pointer px-3 py-2 border border-dashed border-gray-300 rounded-lg hover:border-primary/50 transition-colors">
                     <Paperclip size={13} className="text-gray-400" />
                     <span className="font-body text-xs text-gray-500">Attach files</span>
