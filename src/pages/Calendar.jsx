@@ -5,13 +5,13 @@ import { useAuth } from '../context/AuthContext'
 import {
   format, parseISO, startOfMonth, endOfMonth, eachDayOfInterval,
   addMonths, subMonths, startOfWeek, endOfWeek, addWeeks, subWeeks,
-  isSameDay, isSameMonth, isToday, addDays,
+  isSameDay, isSameMonth, isToday, addDays, getDay,
 } from 'date-fns'
-import { ChevronLeft, ChevronRight, Plus, X, Edit3, Trash2, ExternalLink, CalendarPlus } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Plus, X, Edit3, Trash2, ExternalLink, CalendarPlus, Repeat, ToggleLeft, ToggleRight } from 'lucide-react'
 
 const APPT_TYPES = ['Doctor Appointment', 'Patient Meeting', 'Family Meeting', 'SBHA General Event', 'Other']
 
-const APPT_SELECT = 'id, title, appointment_date, appointment_type, patient_id, provider, location, notes, completed, patients(id, first_name, last_name, status, deleted_at)'
+const APPT_SELECT = 'id, title, appointment_date, appointment_type, patient_id, provider, location, notes, completed, series_id, is_recurring, patients(id, first_name, last_name, status, deleted_at)'
 
 // Hex-based colors for calendar pills (consistent across month + week views)
 const TYPE_COLORS = {
@@ -42,6 +42,54 @@ function getTypeColor(type) {
   return TYPE_COLORS[type] || TYPE_COLORS['Other']
 }
 
+// Generate all dates for a recurring series
+function buildRecurringDates(startStr, freq, weekDayNums, endType, count, endDateStr) {
+  const base = parseISO(startStr.slice(0, 16))
+  const timeStr = startStr.length >= 16 ? startStr.slice(11, 16) : '09:00'
+  const dates = []
+
+  const maxCount =
+    endType === 'never'
+      ? (freq === 'daily' ? 365 : freq === 'weekly' ? 104 : 36)
+      : endType === 'count'
+      ? Math.min(Number(count) || 1, 500)
+      : 500
+
+  const endLimit =
+    endType === 'date' && endDateStr
+      ? new Date(endDateStr + 'T23:59:59')
+      : null
+
+  function push(d) {
+    if (endLimit && d > endLimit) return false
+    if (dates.length >= maxCount) return false
+    dates.push(format(d, "yyyy-MM-dd") + 'T' + timeStr)
+    return true
+  }
+
+  if (freq === 'daily') {
+    let cur = base
+    while (push(cur)) cur = addDays(cur, 1)
+  } else if (freq === 'weekly') {
+    const sortedDays = [...new Set(weekDayNums)].sort((a, b) => a - b)
+    if (!sortedDays.length) return [startStr]
+    let weekBase = startOfWeek(base, { weekStartsOn: 0 })
+    outer: while (true) {
+      for (const dow of sortedDays) {
+        const candidate = addDays(weekBase, dow)
+        if (candidate < base) continue
+        if (!push(candidate)) break outer
+      }
+      weekBase = addDays(weekBase, 7)
+    }
+  } else if (freq === 'monthly') {
+    let cur = base
+    while (push(cur)) cur = addMonths(cur, 1)
+  }
+
+  return dates
+}
+
 function parseApptDateLocal(dateStr) {
   if (!dateStr) return new Date(0)
   return parseISO(dateStr.slice(0, 16))
@@ -57,6 +105,7 @@ export default function CalendarPage() {
   const [patients, setPatients] = useState([])
   const [loading, setLoading] = useState(true)
   const [apptModal, setApptModal] = useState(null)
+  const [dayModal, setDayModal] = useState(null) // null | { day: Date, appts: [] }
   const [showAddModal, setShowAddModal] = useState(false)
   const [savingEvent, setSavingEvent] = useState(false)
   const [savingApptUpdate, setSavingApptUpdate] = useState(false)
@@ -87,46 +136,87 @@ export default function CalendarPage() {
 
   async function saveEvent(draft) {
     setSavingEvent(true)
-    const payload = {
+    const base = {
       title: draft.title,
       appointment_type: draft.appointment_type || null,
-      appointment_date: draft.appointment_date,
       patient_id: draft.patient_id || null,
       provider: draft.provider || null,
       location: draft.location || null,
       notes: draft.notes || null,
       user_id: session.user.id,
     }
-    const { data } = await supabase.from('appointments').insert(payload).select(APPT_SELECT).single()
-    if (data) {
-      const p = data.patients
-      const valid = !data.patient_id || !p || (!p.deleted_at && p.status === 'active')
-      if (valid) {
-        setAppointments(prev =>
-          [...prev, data].sort((a, b) => new Date(a.appointment_date) - new Date(b.appointment_date))
-        )
+
+    if (draft.recur?.enabled) {
+      const dates = buildRecurringDates(
+        draft.appointment_date,
+        draft.recur.freq,
+        draft.recur.weekDays,
+        draft.recur.endType,
+        draft.recur.count,
+        draft.recur.endDate,
+      )
+      const seriesId = crypto.randomUUID()
+      const rows = dates.map(d => ({ ...base, appointment_date: d, series_id: seriesId, is_recurring: true }))
+      const { data } = await supabase.from('appointments').insert(rows).select(APPT_SELECT)
+      if (data) {
+        const valid = data.filter(a => !a.patient_id || !a.patients || (!a.patients.deleted_at && a.patients.status === 'active'))
+        setAppointments(prev => [...prev, ...valid].sort((a, b) => new Date(a.appointment_date) - new Date(b.appointment_date)))
+      }
+    } else {
+      const payload = { ...base, appointment_date: draft.appointment_date }
+      const { data } = await supabase.from('appointments').insert(payload).select(APPT_SELECT).single()
+      if (data) {
+        const p = data.patients
+        const valid = !data.patient_id || !p || (!p.deleted_at && p.status === 'active')
+        if (valid) setAppointments(prev => [...prev, data].sort((a, b) => new Date(a.appointment_date) - new Date(b.appointment_date)))
       }
     }
+
     setSavingEvent(false)
     setShowAddModal(false)
   }
 
-  async function updateAppt(apptId, fields) {
+  async function updateAppt(apptId, fields, scope = 'one') {
     setSavingApptUpdate(true)
-    const { data } = await supabase.from('appointments').update(fields).eq('id', apptId).select(APPT_SELECT).single()
-    if (data) {
-      setAppointments(prev =>
-        prev.map(a => a.id === apptId ? data : a)
-          .sort((a, b) => new Date(a.appointment_date) - new Date(b.appointment_date))
-      )
-      setApptModal(data)
+    if (scope === 'future') {
+      const appt = appointments.find(a => a.id === apptId)
+      if (appt?.series_id) {
+        // Update shared fields (not appointment_date — each occurrence keeps its own date)
+        const { appointment_date: _d, id: _id, patients: _p, created_at: _ca, series_id: _s, is_recurring: _ir, ...sharedFields } = fields
+        await supabase.from('appointments').update(sharedFields).eq('series_id', appt.series_id).gte('appointment_date', appt.appointment_date)
+        const { data: refreshed } = await supabase.from('appointments').select(APPT_SELECT).order('appointment_date')
+        if (refreshed) {
+          const filtered = refreshed.filter(a => !a.patient_id || !a.patients || (!a.patients.deleted_at && a.patients.status === 'active'))
+          setAppointments(filtered)
+        }
+      }
+    } else {
+      const { data } = await supabase.from('appointments').update(fields).eq('id', apptId).select(APPT_SELECT).single()
+      if (data) {
+        setAppointments(prev =>
+          prev.map(a => a.id === apptId ? data : a)
+            .sort((a, b) => new Date(a.appointment_date) - new Date(b.appointment_date))
+        )
+        setApptModal(data)
+      }
     }
     setSavingApptUpdate(false)
   }
 
-  async function deleteAppt(apptId) {
-    await supabase.from('appointments').delete().eq('id', apptId)
-    setAppointments(prev => prev.filter(a => a.id !== apptId))
+  async function deleteAppt(apptId, scope = 'one') {
+    if (scope === 'future') {
+      const appt = appointments.find(a => a.id === apptId)
+      if (appt?.series_id) {
+        await supabase.from('appointments').delete().eq('series_id', appt.series_id).gte('appointment_date', appt.appointment_date)
+        setAppointments(prev => prev.filter(a => !(a.series_id === appt.series_id && a.appointment_date >= appt.appointment_date)))
+      } else {
+        await supabase.from('appointments').delete().eq('id', apptId)
+        setAppointments(prev => prev.filter(a => a.id !== apptId))
+      }
+    } else {
+      await supabase.from('appointments').delete().eq('id', apptId)
+      setAppointments(prev => prev.filter(a => a.id !== apptId))
+    }
     setApptModal(null)
   }
 
@@ -338,11 +428,14 @@ export default function CalendarPage() {
                   key={day.toISOString()}
                   className={`min-h-[60px] sm:min-h-[110px] p-1 sm:p-1.5 ${!inMonth ? 'bg-gray-50/60' : ''}`}
                 >
-                  <div className={`w-5 h-5 sm:w-7 sm:h-7 mb-0.5 sm:mb-1 flex items-center justify-center rounded-full font-body text-xs sm:text-sm font-medium ${
-                    today ? 'bg-primary text-white' : inMonth ? 'text-gray-700' : 'text-gray-300'
-                  }`}>
+                  <button
+                    onClick={() => dayAppts.length > 0 ? setDayModal({ day, appts: dayAppts }) : null}
+                    className={`w-5 h-5 sm:w-7 sm:h-7 mb-0.5 sm:mb-1 flex items-center justify-center rounded-full font-body text-xs sm:text-sm font-medium transition-colors ${
+                      today ? 'bg-primary text-white' : inMonth ? 'text-gray-700 hover:bg-gray-100' : 'text-gray-300'
+                    }`}
+                  >
                     {format(day, 'd')}
-                  </div>
+                  </button>
                   <div className="space-y-0.5">
                     {dayAppts.slice(0, 2).map(appt => {
                       const c = getApptColor(appt)
@@ -353,7 +446,10 @@ export default function CalendarPage() {
                           className="w-full text-left rounded px-1 sm:px-1.5 py-0.5 font-body text-[9px] sm:text-[11px] leading-tight truncate transition-opacity hover:opacity-75"
                           style={{ backgroundColor: c.bg, color: c.text }}
                         >
-                          <span className="font-semibold">{appt.title}</span>
+                          <span className="font-semibold inline-flex items-center gap-0.5">
+                            {appt.is_recurring && <Repeat size={8} className="flex-shrink-0 opacity-70" />}
+                            <span className="truncate">{appt.title}</span>
+                          </span>
                           <span className="hidden sm:inline opacity-70">
                             {appt.patients && ` · ${appt.patients.first_name} ${appt.patients.last_name}`}
                           </span>
@@ -361,7 +457,12 @@ export default function CalendarPage() {
                       )
                     })}
                     {dayAppts.length > 2 && (
-                      <p className="font-body text-[9px] sm:text-[10px] text-gray-400 pl-1 sm:pl-1.5">+{dayAppts.length - 2}</p>
+                      <button
+                        onClick={() => setDayModal({ day, appts: dayAppts })}
+                        className="font-body text-[9px] sm:text-[10px] text-primary/70 hover:text-primary pl-1 sm:pl-1.5 transition-colors"
+                      >
+                        +{dayAppts.length - 2} more
+                      </button>
                     )}
                   </div>
                 </div>
@@ -422,7 +523,8 @@ export default function CalendarPage() {
                         <p className="font-body text-[11px] font-semibold leading-snug" style={{ color: c.text }}>
                           {format(parseApptDateLocal(appt.appointment_date), 'h:mm a')}
                         </p>
-                        <p className="font-body text-[11px] text-gray-700 leading-snug truncate mt-0.5">
+                        <p className="font-body text-[11px] text-gray-700 leading-snug truncate mt-0.5 flex items-center gap-1">
+                          {appt.is_recurring && <Repeat size={9} className="flex-shrink-0 text-gray-400" />}
                           {appt.title}
                         </p>
                         {appt.patients && (
@@ -440,6 +542,17 @@ export default function CalendarPage() {
           </div>
           </div>
         </div>
+      )}
+
+      {/* ── Day Events Modal ── */}
+      {dayModal && (
+        <DayModal
+          day={dayModal.day}
+          appts={dayModal.appts}
+          onClose={() => setDayModal(null)}
+          onOpenAppt={appt => { setDayModal(null); setApptModal(appt) }}
+          getApptColor={getApptColor}
+        />
       )}
 
       {/* ── Appointment Detail Modal ── */}
@@ -509,6 +622,87 @@ function generateICS(appt) {
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
+// ── DayModal ────────────────────────────────────────────────────────────────────
+function DayModal({ day, appts, onClose, onOpenAppt, getApptColor }) {
+  useEffect(() => {
+    const handler = e => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [onClose])
+
+  return (
+    <div
+      className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center p-0 sm:p-4"
+      onClick={e => { if (e.target === e.currentTarget) onClose() }}
+    >
+      <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" />
+      <div className="relative bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl w-full sm:max-w-sm flex flex-col max-h-[85vh] sm:max-h-[80vh] overflow-hidden">
+
+        {/* Header */}
+        <div className="flex items-start justify-between px-5 py-4 border-b border-gray-100 flex-shrink-0">
+          <div>
+            <h2 className="font-heading text-xl font-semibold text-gray-800">
+              {format(day, 'EEEE, MMMM d')}
+            </h2>
+            <p className="font-body text-xs text-gray-400 mt-0.5">
+              {appts.length} event{appts.length !== 1 ? 's' : ''}
+            </p>
+          </div>
+          <button onClick={onClose} className="p-1.5 text-gray-400 hover:text-gray-600 transition-colors flex-shrink-0 mt-0.5">
+            <X size={18} />
+          </button>
+        </div>
+
+        {/* Scrollable event list */}
+        <div className="overflow-y-auto flex-1 px-3 py-3 pb-6 sm:pb-3">
+          <div className="space-y-1">
+            {appts.map(appt => {
+              const c = getApptColor(appt)
+              return (
+                <button
+                  key={appt.id}
+                  onClick={() => onOpenAppt(appt)}
+                  className="w-full text-left rounded-xl px-3 py-2.5 hover:bg-gray-50 transition-colors flex items-center gap-3"
+                >
+                  <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: c.text }} />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="font-body text-sm font-semibold text-gray-800 truncate flex items-center gap-1">
+                        {appt.is_recurring && <Repeat size={10} className="opacity-40 flex-shrink-0" />}
+                        {appt.title}
+                      </span>
+                      {appt.appointment_type && (
+                        <span
+                          className="font-body text-[10px] font-semibold px-2 py-0.5 rounded-full border flex-shrink-0"
+                          style={{ backgroundColor: c.bg, color: c.text, borderColor: c.border }}
+                        >
+                          {appt.appointment_type}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-1.5 mt-0.5">
+                      <span className="font-body text-xs text-gray-400">
+                        {format(parseApptDateLocal(appt.appointment_date), 'h:mm a')}
+                      </span>
+                      {appt.patients && (
+                        <span className="font-body text-xs text-gray-400">
+                          · {appt.patients.first_name} {appt.patients.last_name}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <ChevronRight size={13} className="text-gray-300 flex-shrink-0" />
+                </button>
+              )
+            })}
+          </div>
+        </div>
+
+      </div>
+    </div>
+  )
+}
+
 // ── ApptDetailModal ─────────────────────────────────────────────────────────────
 function ApptDetailModal({ appt, onClose, onUpdate, onDelete, onViewPatient, saving, patients }) {
   const [mode, setMode] = useState('view')
@@ -517,6 +711,8 @@ function ApptDetailModal({ appt, onClose, onUpdate, onDelete, onViewPatient, sav
   const initIsOther = !!appt.appointment_type && !knownTypes.includes(appt.appointment_type)
   const [typeIsOther, setTypeIsOther] = useState(initIsOther)
   const [otherTypeText, setOtherTypeText] = useState(initIsOther ? appt.appointment_type : '')
+  const [seriesPrompt, setSeriesPrompt] = useState(null) // null | 'edit' | 'delete'
+  const [editScope, setEditScope] = useState('one') // 'one' | 'future'
 
   useEffect(() => {
     setDraft({ ...appt })
@@ -524,12 +720,24 @@ function ApptDetailModal({ appt, onClose, onUpdate, onDelete, onViewPatient, sav
     setTypeIsOther(isOther)
     setOtherTypeText(isOther ? appt.appointment_type : '')
     setMode('view')
+    setSeriesPrompt(null)
+    setEditScope('one')
   }, [appt.id])
+
+  function handleEditClick() {
+    if (appt.is_recurring) setSeriesPrompt('edit')
+    else setMode('edit')
+  }
+
+  function handleDeleteClick() {
+    if (appt.is_recurring) setSeriesPrompt('delete')
+    else onDelete(appt.id, 'one')
+  }
 
   function handleSave() {
     const finalType = typeIsOther ? otherTypeText.trim() : draft.appointment_type
     const { patients: _p, created_at: _ca, ...fields } = draft
-    onUpdate(appt.id, { ...fields, appointment_type: finalType || null })
+    onUpdate(appt.id, { ...fields, appointment_type: finalType || null }, editScope)
   }
 
   const typeColor = appt.appointment_type ? getTypeColor(appt.appointment_type) : null
@@ -549,21 +757,28 @@ function ApptDetailModal({ appt, onClose, onUpdate, onDelete, onViewPatient, sav
                 <h2 className="font-heading text-2xl font-semibold text-gray-800 leading-snug">
                   {appt.title || 'Appointment'}
                 </h2>
-                {typeColor && (
-                  <span
-                    className="inline-flex mt-2 px-2.5 py-0.5 rounded-full font-body text-[10px] font-semibold border"
-                    style={{ backgroundColor: typeColor.bg, color: typeColor.text, borderColor: typeColor.border }}
-                  >
-                    {appt.appointment_type}
-                  </span>
-                )}
+                <div className="flex items-center gap-2 mt-2 flex-wrap">
+                  {typeColor && (
+                    <span
+                      className="inline-flex px-2.5 py-0.5 rounded-full font-body text-[10px] font-semibold border"
+                      style={{ backgroundColor: typeColor.bg, color: typeColor.text, borderColor: typeColor.border }}
+                    >
+                      {appt.appointment_type}
+                    </span>
+                  )}
+                  {appt.is_recurring && (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-body text-[10px] font-semibold bg-gray-100 text-gray-500 border border-gray-200">
+                      <Repeat size={9} /> Recurring
+                    </span>
+                  )}
+                </div>
               </div>
               <div className="flex items-center gap-1 flex-shrink-0 mt-0.5">
-                <button onClick={() => setMode('edit')} title="Edit"
+                <button onClick={handleEditClick} title="Edit"
                   className="w-8 h-8 flex items-center justify-center rounded-lg text-gray-400 hover:text-primary hover:bg-primary-light transition-colors">
                   <Edit3 size={15} />
                 </button>
-                <button onClick={() => onDelete(appt.id)} title="Delete"
+                <button onClick={handleDeleteClick} title="Delete"
                   className="w-8 h-8 flex items-center justify-center rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors">
                   <Trash2 size={15} />
                 </button>
@@ -636,11 +851,63 @@ function ApptDetailModal({ appt, onClose, onUpdate, onDelete, onViewPatient, sav
               </button>
               <button onClick={onClose} className="btn-ghost py-2.5 px-5 text-sm w-full sm:w-auto">Close</button>
             </div>
+
+            {/* Series scope prompt — slides up as an overlay when triggered */}
+            {seriesPrompt && (
+              <div className="absolute inset-0 bg-white/95 backdrop-blur-sm flex flex-col items-center justify-center px-8 rounded-t-2xl sm:rounded-2xl">
+                <div className="w-10 h-10 rounded-full bg-primary-light flex items-center justify-center mb-4">
+                  <Repeat size={18} className="text-primary" />
+                </div>
+                <p className="font-heading text-xl font-semibold text-gray-800 mb-1 text-center">
+                  {seriesPrompt === 'edit' ? 'Edit recurring event' : 'Delete recurring event'}
+                </p>
+                <p className="font-body text-sm text-gray-400 mb-6 text-center">
+                  This event is part of a recurring series.
+                </p>
+                <div className="w-full space-y-2 max-w-xs">
+                  <button
+                    onClick={() => {
+                      if (seriesPrompt === 'edit') { setEditScope('one'); setMode('edit'); setSeriesPrompt(null) }
+                      else { onDelete(appt.id, 'one') }
+                    }}
+                    className="w-full px-4 py-2.5 rounded-xl border border-gray-200 font-body text-sm font-semibold text-gray-700 hover:bg-gray-50 transition-colors text-left"
+                  >
+                    Just this event
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (seriesPrompt === 'edit') { setEditScope('future'); setMode('edit'); setSeriesPrompt(null) }
+                      else { onDelete(appt.id, 'future') }
+                    }}
+                    className={`w-full px-4 py-2.5 rounded-xl font-body text-sm font-semibold transition-colors text-left ${
+                      seriesPrompt === 'delete'
+                        ? 'bg-red-50 text-red-600 border border-red-200 hover:bg-red-100'
+                        : 'bg-primary-light text-primary border border-primary/20 hover:bg-primary/20'
+                    }`}
+                  >
+                    This and all future events
+                  </button>
+                  <button
+                    onClick={() => setSeriesPrompt(null)}
+                    className="w-full px-4 py-2 font-body text-sm text-gray-400 hover:text-gray-600 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
           </>
         ) : (
           <>
             <div className="flex items-center justify-between px-7 py-4 border-b border-gray-100 flex-shrink-0">
-              <h2 className="font-heading text-xl font-semibold text-gray-800">Edit Appointment</h2>
+              <div>
+                <h2 className="font-heading text-xl font-semibold text-gray-800">Edit Appointment</h2>
+                {editScope === 'future' && (
+                  <p className="font-body text-xs text-primary mt-0.5 flex items-center gap-1">
+                    <Repeat size={10} /> Editing this and all future events
+                  </p>
+                )}
+              </div>
               <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors">
                 <X size={16} />
               </button>
@@ -730,9 +997,24 @@ function AddEventModal({ onClose, onSave, saving, defaultDate, patients }) {
   const [typeIsOther, setTypeIsOther] = useState(false)
   const [otherTypeText, setOtherTypeText] = useState('')
 
+  // Recurring state
+  const [recurEnabled, setRecurEnabled] = useState(false)
+  const [recurFreq, setRecurFreq] = useState('weekly')
+  const [recurWeekDays, setRecurWeekDays] = useState(() => [getDay(defaultDate)])
+  const [recurEndType, setRecurEndType] = useState('count')
+  const [recurCount, setRecurCount] = useState(10)
+  const [recurEndDate, setRecurEndDate] = useState('')
+
+  function toggleWeekDay(d) {
+    setRecurWeekDays(prev => prev.includes(d) ? prev.filter(x => x !== d) : [...prev, d])
+  }
+
   function handleSave() {
     const finalType = typeIsOther ? otherTypeText.trim() : draft.appointment_type
-    onSave({ ...draft, appointment_type: finalType || null, patient_id: draft.patient_id || null })
+    const recur = recurEnabled
+      ? { enabled: true, freq: recurFreq, weekDays: recurWeekDays, endType: recurEndType, count: recurCount, endDate: recurEndDate }
+      : { enabled: false }
+    onSave({ ...draft, appointment_type: finalType || null, patient_id: draft.patient_id || null, recur })
   }
 
   return (
@@ -741,8 +1023,9 @@ function AddEventModal({ onClose, onSave, saving, defaultDate, patients }) {
       onClick={e => { if (e.target === e.currentTarget) onClose() }}
     >
       <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" />
-      <div className="relative bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl w-full sm:max-w-md flex flex-col overflow-hidden max-h-[95vh] sm:max-h-none">
+      <div className="relative bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl w-full sm:max-w-md flex flex-col max-h-[95vh] sm:max-h-[90vh] overflow-hidden">
 
+        {/* Header — always visible */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 flex-shrink-0">
           <h2 className="font-heading text-xl font-semibold text-gray-800">Add Event</h2>
           <button onClick={onClose} className="p-1.5 text-gray-400 hover:text-gray-600 transition-colors">
@@ -750,7 +1033,8 @@ function AddEventModal({ onClose, onSave, saving, defaultDate, patients }) {
           </button>
         </div>
 
-        <div className="px-6 pt-5 pb-20 sm:pb-5 space-y-3 overflow-y-auto flex-1">
+        {/* Scrollable content */}
+        <div className="px-6 pt-5 pb-4 space-y-3 overflow-y-auto flex-1">
           <div>
             <label className="label">Title *</label>
             <input className="input" placeholder="Event title" value={draft.title} autoFocus
@@ -801,13 +1085,100 @@ function AddEventModal({ onClose, onSave, saving, defaultDate, patients }) {
             <textarea className="input resize-none" rows={3} placeholder="Additional notes…" value={draft.notes}
               onChange={e => setDraft(d => ({ ...d, notes: e.target.value }))} />
           </div>
+
+          {/* Repeat section */}
+          <div className="pt-1 border-t border-gray-100">
+            <div className="flex items-center justify-between py-1">
+              <label className="label mb-0 flex items-center gap-1.5">
+                <Repeat size={13} className="text-gray-400" /> Repeat
+              </label>
+              <button
+                type="button"
+                onClick={() => setRecurEnabled(e => !e)}
+                className="flex items-center transition-colors"
+              >
+                {recurEnabled
+                  ? <ToggleRight size={24} className="text-primary" />
+                  : <ToggleLeft size={24} className="text-gray-300" />}
+              </button>
+            </div>
+
+            {recurEnabled && (
+              <div className="mt-2 space-y-3 bg-gray-50 rounded-xl p-3">
+                {/* Frequency */}
+                <div>
+                  <label className="label text-[11px]">Frequency</label>
+                  <select className="input mt-0.5 text-sm" value={recurFreq} onChange={e => setRecurFreq(e.target.value)}>
+                    <option value="daily">Daily</option>
+                    <option value="weekly">Weekly</option>
+                    <option value="monthly">Monthly</option>
+                  </select>
+                </div>
+
+                {/* Weekly: day-of-week checkboxes */}
+                {recurFreq === 'weekly' && (
+                  <div>
+                    <label className="label text-[11px]">On these days</label>
+                    <div className="flex gap-1.5 mt-1.5">
+                      {['Su','Mo','Tu','We','Th','Fr','Sa'].map((d, i) => (
+                        <button
+                          key={i}
+                          type="button"
+                          onClick={() => toggleWeekDay(i)}
+                          className={`w-8 h-8 rounded-full font-body text-[11px] font-semibold transition-colors ${
+                            recurWeekDays.includes(i)
+                              ? 'bg-primary text-white'
+                              : 'bg-white text-gray-500 border border-gray-200 hover:border-primary/40'
+                          }`}
+                        >
+                          {d}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Monthly: informational */}
+                {recurFreq === 'monthly' && draft.appointment_date && (
+                  <p className="font-body text-xs text-gray-500">
+                    On day {format(parseISO(draft.appointment_date.slice(0, 10)), 'd')} of every month
+                  </p>
+                )}
+
+                {/* End condition */}
+                <div>
+                  <label className="label text-[11px]">Ends</label>
+                  <select className="input mt-0.5 text-sm" value={recurEndType} onChange={e => setRecurEndType(e.target.value)}>
+                    <option value="count">After X occurrences</option>
+                    <option value="date">On a date</option>
+                    <option value="never">Never (max 2 years)</option>
+                  </select>
+                  {recurEndType === 'count' && (
+                    <div className="flex items-center gap-2 mt-1.5">
+                      <input
+                        type="number" min={1} max={500} className="input w-20 text-sm"
+                        value={recurCount}
+                        onChange={e => setRecurCount(Number(e.target.value))}
+                      />
+                      <span className="font-body text-sm text-gray-500">occurrences</span>
+                    </div>
+                  )}
+                  {recurEndType === 'date' && (
+                    <input type="date" className="input mt-1.5 text-sm" value={recurEndDate}
+                      onChange={e => setRecurEndDate(e.target.value)} />
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
-        <div className="flex gap-2 px-6 py-4 border-t border-gray-100 flex-shrink-0">
+        {/* Footer — always visible */}
+        <div className="flex gap-2 px-6 pt-4 pb-6 sm:pb-4 border-t border-gray-100 flex-shrink-0">
           <button onClick={onClose} className="btn-ghost flex-1 py-2 text-sm">Cancel</button>
-          <button onClick={handleSave} disabled={saving || !draft.title?.trim() || !draft.appointment_date}
+          <button onClick={handleSave} disabled={saving || !draft.title?.trim() || !draft.appointment_date || (recurEnabled && recurFreq === 'weekly' && recurWeekDays.length === 0)}
             className="btn-primary flex-1 py-2 text-sm disabled:opacity-50">
-            {saving ? 'Saving…' : 'Add Event'}
+            {saving ? 'Saving…' : recurEnabled ? 'Add Recurring Event' : 'Add Event'}
           </button>
         </div>
 
