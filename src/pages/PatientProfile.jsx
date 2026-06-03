@@ -181,6 +181,7 @@ export default function PatientProfile() {
   const [timerElapsed, setTimerElapsed] = useState(0)
   const [sessionModal, setSessionModal] = useState(null) // null | { duration_seconds, date, notes }
   const [savingSession, setSavingSession] = useState(false)
+  const [sessionViewModal, setSessionViewModal] = useState(null) // null | session object
   const timerIntervalRef = useRef(null)
 
   // Session logs
@@ -1126,6 +1127,24 @@ export default function PatientProfile() {
   async function deleteSession(sessionId) {
     await supabase.from('session_logs').delete().eq('id', sessionId)
     setSessionLogs(prev => prev.filter(s => s.id !== sessionId))
+  }
+
+  async function updateSession(sessionId, { date, duration_seconds, notes }) {
+    setSavingSession(true)
+    const { data } = await supabase.from('session_logs').update({
+      session_date: date,
+      duration_seconds,
+      notes: notes || null,
+    }).eq('id', sessionId).select().single()
+    if (data) setSessionLogs(prev => prev.map(s => s.id === sessionId ? data : s))
+    setSessionViewModal(null)
+    setSavingSession(false)
+  }
+
+  async function deleteSessionFromModal(sessionId) {
+    await supabase.from('session_logs').delete().eq('id', sessionId)
+    setSessionLogs(prev => prev.filter(s => s.id !== sessionId))
+    setSessionViewModal(null)
   }
 
   // ── Medication List Export ─────────────────────────────────────
@@ -2751,7 +2770,11 @@ export default function PatientProfile() {
                   ) : (
                     <div className="space-y-3">
                       {sessionLogs.map(s => (
-                        <div key={s.id} className="flex items-start justify-between gap-2 border-b border-gray-50 pb-3 last:border-0 last:pb-0">
+                        <button
+                          key={s.id}
+                          onClick={() => setSessionViewModal(s)}
+                          className="w-full flex items-start justify-between gap-2 border-b border-gray-50 pb-3 last:border-0 last:pb-0 text-left hover:bg-gray-50 -mx-2 px-2 rounded-lg transition-colors"
+                        >
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2 flex-wrap">
                               <span className="font-body text-xs font-semibold text-gray-700">{format(parseISO(s.session_date), 'MMM d, yyyy')}</span>
@@ -2759,13 +2782,8 @@ export default function PatientProfile() {
                             </div>
                             {s.notes && <p className="font-body text-xs text-gray-400 mt-0.5 line-clamp-2">{s.notes}</p>}
                           </div>
-                          <button
-                            onClick={() => deleteSession(s.id)}
-                            className="p-1 text-gray-300 hover:text-red-400 transition-colors flex-shrink-0"
-                          >
-                            <Trash2 size={12} />
-                          </button>
-                        </div>
+                          <ChevronRight size={13} className="text-gray-300 flex-shrink-0 mt-0.5" />
+                        </button>
                       ))}
                     </div>
                   )}
@@ -3133,6 +3151,17 @@ export default function PatientProfile() {
           saving={savingSession}
           onClose={() => setSessionModal(null)}
           onSave={saveSession}
+        />
+      )}
+
+      {/* ── SESSION VIEW / EDIT MODAL ── */}
+      {sessionViewModal && (
+        <SessionViewModal
+          session={sessionViewModal}
+          saving={savingSession}
+          onClose={() => setSessionViewModal(null)}
+          onUpdate={updateSession}
+          onDelete={deleteSessionFromModal}
         />
       )}
 
@@ -4008,6 +4037,135 @@ function AppointmentModal({ modal, onClose, onSave, onDelete, saving }) {
 
 // ── NoteModal ─────────────────────────────────────────────────────────────────
 const INSURANCE_TYPES_LIST = ['Medicare', 'Medicaid', 'Medicare + Medicaid', 'Private Insurance', 'Uninsured']
+
+function SessionViewModal({ session, onClose, onUpdate, onDelete, saving }) {
+  const [mode, setMode] = useState('view')
+  const [draft, setDraft] = useState({ date: session.session_date, notes: session.notes || '' })
+  const [draftH, setDraftH] = useState(() => Math.floor(session.duration_seconds / 3600))
+  const [draftM, setDraftM] = useState(() => Math.floor((session.duration_seconds % 3600) / 60))
+  const [draftS, setDraftS] = useState(() => session.duration_seconds % 60)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+
+  function handleSave() {
+    const secs = (parseInt(draftH, 10) || 0) * 3600 + (parseInt(draftM, 10) || 0) * 60 + (parseInt(draftS, 10) || 0)
+    onUpdate(session.id, { ...draft, duration_seconds: secs })
+  }
+
+  useEffect(() => {
+    const handler = e => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [onClose])
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+      <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" />
+      <div className="relative bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl w-full sm:max-w-md flex flex-col overflow-hidden max-h-[95vh] sm:max-h-none">
+
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 flex-shrink-0">
+          <h2 className="font-heading text-xl font-semibold text-gray-800">
+            {mode === 'edit' ? 'Edit Session' : 'Session Details'}
+          </h2>
+          <button onClick={onClose} className="p-1.5 text-gray-400 hover:text-gray-600 transition-colors">
+            <X size={18} />
+          </button>
+        </div>
+
+        {/* Content */}
+        <div className="px-6 pt-5 pb-20 sm:pb-5 space-y-4 overflow-y-auto flex-1">
+          {mode === 'view' ? (
+            <>
+              <div className="flex justify-center">
+                <div className="bg-primary-light rounded-xl px-8 py-4 text-center">
+                  <p className="font-body text-xs text-gray-500 mb-1 uppercase tracking-wide">Duration</p>
+                  <p className="font-heading text-4xl text-primary font-semibold">{formatDurationFull(session.duration_seconds)}</p>
+                </div>
+              </div>
+              <div className="space-y-1">
+                <p className="font-body text-xs font-semibold text-gray-400 uppercase tracking-wider">Date</p>
+                <p className="font-body text-sm text-gray-700">{format(parseISO(session.session_date), 'MMMM d, yyyy')}</p>
+              </div>
+              {session.notes ? (
+                <div className="space-y-1">
+                  <p className="font-body text-xs font-semibold text-gray-400 uppercase tracking-wider">Notes</p>
+                  <p className="font-body text-sm text-gray-700 whitespace-pre-wrap">{session.notes}</p>
+                </div>
+              ) : (
+                <p className="font-body text-xs text-gray-400 italic">No notes for this session.</p>
+              )}
+            </>
+          ) : (
+            <>
+              <div>
+                <label className="label">Date</label>
+                <input type="date" className="input" value={draft.date} onChange={e => setDraft(d => ({ ...d, date: e.target.value }))} />
+              </div>
+              <div>
+                <label className="label">Duration</label>
+                <div className="flex items-center gap-2">
+                  <div className="flex-1">
+                    <input type="number" min={0} className="input text-center" value={draftH} onChange={e => setDraftH(e.target.value)} />
+                    <p className="font-body text-xs text-center text-gray-400 mt-0.5">hours</p>
+                  </div>
+                  <span className="font-heading text-xl text-gray-300 pb-5">:</span>
+                  <div className="flex-1">
+                    <input type="number" min={0} max={59} className="input text-center" value={draftM} onChange={e => setDraftM(e.target.value)} />
+                    <p className="font-body text-xs text-center text-gray-400 mt-0.5">min</p>
+                  </div>
+                  <span className="font-heading text-xl text-gray-300 pb-5">:</span>
+                  <div className="flex-1">
+                    <input type="number" min={0} max={59} className="input text-center" value={draftS} onChange={e => setDraftS(e.target.value)} />
+                    <p className="font-body text-xs text-center text-gray-400 mt-0.5">sec</p>
+                  </div>
+                </div>
+              </div>
+              <div>
+                <label className="label">Notes</label>
+                <textarea
+                  className="input resize-none"
+                  rows={3}
+                  placeholder="What was discussed or worked on during this session?"
+                  value={draft.notes}
+                  onChange={e => setDraft(d => ({ ...d, notes: e.target.value }))}
+                />
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="flex gap-2 px-6 pt-4 pb-6 sm:py-4 border-t border-gray-100 flex-shrink-0">
+          {mode === 'view' ? (
+            <>
+              <button
+                onClick={() => confirmDelete ? onDelete(session.id) : setConfirmDelete(true)}
+                className={`flex-1 py-2 text-sm rounded-xl font-body font-semibold transition-colors ${
+                  confirmDelete
+                    ? 'bg-red-500 text-white hover:bg-red-600'
+                    : 'border border-gray-200 text-red-400 hover:bg-red-50'
+                }`}
+              >
+                {confirmDelete ? 'Confirm Delete' : 'Delete'}
+              </button>
+              <button onClick={() => setMode('edit')} className="btn-primary flex-1 py-2 text-sm">
+                Edit
+              </button>
+            </>
+          ) : (
+            <>
+              <button onClick={() => setMode('view')} className="btn-ghost flex-1 py-2 text-sm">Cancel</button>
+              <button onClick={handleSave} disabled={saving} className="btn-primary flex-1 py-2 text-sm disabled:opacity-50">
+                {saving ? 'Saving…' : 'Save Changes'}
+              </button>
+            </>
+          )}
+        </div>
+
+      </div>
+    </div>
+  )
+}
 
 function SessionSaveModal({ modal, onClose, onSave, saving }) {
   const [draft, setDraft] = useState({ ...modal })
