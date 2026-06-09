@@ -21,6 +21,7 @@
     "@tiptap/starter-kit": "^3.23.6",
     "date-fns": "^3.6.0",
     "docx": "^9.7.0",
+    "dompurify": "^3.4.8",
     "file-saver": "^2.0.5",
     "lucide-react": "^0.441.0",
     "react": "^18.3.1",

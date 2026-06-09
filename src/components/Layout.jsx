@@ -7,6 +7,7 @@ import {
   FolderOpen,
   ClipboardList,
   LogOut,
+  Settings,
   ChevronDown,
   ChevronRight,
   Download,
@@ -184,6 +185,20 @@ export default function Layout({ children }) {
               </span>
             </button>
           )}
+          <NavLink
+            to="/settings"
+            title="Settings"
+            className={({ isActive }) =>
+              `flex items-center gap-0 lg:gap-3 group-hover/sidebar:gap-3 py-2.5 rounded-xl font-body font-medium transition-all duration-150 min-h-[44px] w-full
+               px-0 lg:px-3 group-hover/sidebar:px-3 justify-center lg:justify-start group-hover/sidebar:justify-start
+               ${isActive ? 'bg-primary-light text-primary' : 'text-gray-400 hover:bg-gray-50 hover:text-gray-600'}`
+            }
+          >
+            <Settings size={18} className="flex-shrink-0" />
+            <span className="hidden lg:block group-hover/sidebar:block text-sm whitespace-nowrap overflow-hidden">
+              Settings
+            </span>
+          </NavLink>
           <button
             onClick={handleSignOut}
             title="Sign Out"

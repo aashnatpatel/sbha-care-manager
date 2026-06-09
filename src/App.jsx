@@ -2,11 +2,13 @@ import { Routes, Route, Navigate } from 'react-router-dom'
 import { useAuth } from './context/AuthContext'
 import Layout from './components/Layout'
 import LoginPage from './pages/LoginPage'
+import ResetPasswordPage from './pages/ResetPasswordPage'
 import Dashboard from './pages/Dashboard'
 import PatientProfile from './pages/PatientProfile'
 import Documents from './pages/Documents'
 import IntakeForm from './pages/IntakeForm'
 import CalendarPage from './pages/Calendar'
+import SettingsPage from './pages/SettingsPage'
 
 function ProtectedRoute({ children }) {
   const { session, loading } = useAuth()
@@ -43,6 +45,7 @@ export default function App() {
         path="/login"
         element={session ? <Navigate to="/" replace /> : <LoginPage />}
       />
+      <Route path="/reset-password" element={<ResetPasswordPage />} />
       <Route
         path="/*"
         element={
@@ -54,6 +57,7 @@ export default function App() {
                 <Route path="patients/:id" element={<PatientProfile />} />
                 <Route path="intake" element={<IntakeForm />} />
                 <Route path="documents" element={<Documents />} />
+                <Route path="settings" element={<SettingsPage />} />
               </Routes>
             </Layout>
           </ProtectedRoute>

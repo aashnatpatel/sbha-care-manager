@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import DOMPurify from 'dompurify'
 import AvatarEditor from 'react-avatar-editor'
 import { useParams, useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
@@ -5006,7 +5007,7 @@ function NoteModal({ modal, patientId, patientName, onClose, onSave, onUpdate, o
               {note.body ? (
                 <div
                   className="sbha-note-body font-body text-sm text-gray-700 leading-relaxed"
-                  dangerouslySetInnerHTML={{ __html: note.body }}
+                  dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(note.body) }}
                 />
               ) : (
                 <p className="font-body text-sm text-gray-400 italic">No body content.</p>
