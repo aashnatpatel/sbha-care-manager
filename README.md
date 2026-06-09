@@ -61,7 +61,7 @@ SBHA Care Manager replaces scattered Word documents, spreadsheets, and sticky no
 
 I built this as a complete beginner to software development using Claude Code as my primary tool — it's the first real product I've shipped.
 
-I'm a Marketing & Business Analytics student at Indiana University's Kelley School of Business. My background is in GTM strategy, growth marketing, and consumer insights — not engineering. This project came from a real need: my mom runs a healthcare advocacy practice and was managing everything in scattered docs and spreadsheets.
+I'm a recent Marketing & Business Analytics graduate from Indiana University's Kelley School of Business. My background is in GTM strategy, growth marketing, and consumer insights — not engineering. This project came from a real need: my mom runs a healthcare advocacy practice and was managing everything in scattered docs and spreadsheets.
 
 I scoped the product, designed the UX, made every technical decision, and shipped it to production. The app is live and my mom is actively using it.
 
