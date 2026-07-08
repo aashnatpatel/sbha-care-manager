@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
@@ -31,47 +31,71 @@ const INSURANCE_TYPES = ['Medicare', 'Medicaid', 'Medicare + Medicaid', 'Private
 const STEPS = ['Basic Info', 'Goals & Concerns', 'Medical History', 'Medications', 'Care Experience', 'Insurance', 'Historical Notes']
 const INTAKE_NOTE_TYPES = ['General', 'Appointment Summary', 'Phone Call', 'Care Coordination', 'Advocacy Note', 'Family Meeting', 'Other']
 
+const DRAFT_KEY = 'sbha_intake_draft'
+function loadDraft() {
+  try {
+    const raw = localStorage.getItem(DRAFT_KEY)
+    return raw ? JSON.parse(raw) : null
+  } catch { return null }
+}
+
+// Check whether a TipTap HTML string contains any visible text
+function hasNoteBodyContent(html) {
+  return !!(html && html.replace(/<[^>]*>/g, '').trim())
+}
+
 export default function IntakeForm() {
   const { session } = useAuth()
   const navigate = useNavigate()
-  const [step, setStep] = useState(0)
+  const [step, setStep] = useState(() => loadDraft()?.step ?? 0)
   const [saving, setSaving] = useState(false)
   const [showErrors, setShowErrors] = useState(false)
+  const [draftSaved, setDraftSaved] = useState(false)
+  const draftTimerRef = useRef(null)
 
   // Step 0: Basic Info
-  const [basicInfo, setBasicInfo] = useState({
+  const [basicInfo, setBasicInfo] = useState(() => loadDraft()?.basicInfo ?? {
     first_name: '', last_name: '', dob: '', phone: '', email: '', address: '', occupation: '',
     emergency_contact_name: '', emergency_contact_phone: '', emergency_contact_relationship: '',
   })
 
   // Step 1: Goals & Concerns
-  const [reasonForAdvocacy, setReasonForAdvocacy] = useState('')
-  const [goals, setGoals] = useState(['', '', ''])
-  const [overwhelmingFactors, setOverwhelmingFactors] = useState([])
-  const [overwhelmingOtherText, setOverwhelmingOtherText] = useState('')
+  const [reasonForAdvocacy, setReasonForAdvocacy] = useState(() => loadDraft()?.reasonForAdvocacy ?? '')
+  const [goals, setGoals] = useState(() => loadDraft()?.goals ?? ['', '', ''])
+  const [overwhelmingFactors, setOverwhelmingFactors] = useState(() => loadDraft()?.overwhelmingFactors ?? [])
+  const [overwhelmingOtherText, setOverwhelmingOtherText] = useState(() => loadDraft()?.overwhelmingOtherText ?? '')
 
   // Step 2: Medical History
-  const [checkedConditions, setCheckedConditions] = useState([])
-  const [customConditions, setCustomConditions] = useState('')
-  const [hospitalizations, setHospitalizations] = useState([{ reason: '', hospital: '', admission_date: '', discharge_date: '' }])
-  const [providers, setProviders] = useState([{ name: '', role: 'PCP', phone: '', practice: '' }])
-  const [intakeAllergies, setIntakeAllergies] = useState([])
+  const [checkedConditions, setCheckedConditions] = useState(() => loadDraft()?.checkedConditions ?? [])
+  const [customConditions, setCustomConditions] = useState(() => loadDraft()?.customConditions ?? '')
+  const [hospitalizations, setHospitalizations] = useState(() => loadDraft()?.hospitalizations ?? [{ reason: '', hospital: '', admission_date: '', discharge_date: '' }])
+  const [providers, setProviders] = useState(() => loadDraft()?.providers ?? [{ name: '', role: 'PCP', phone: '', practice: '' }])
+  const [intakeAllergies, setIntakeAllergies] = useState(() => loadDraft()?.intakeAllergies ?? [])
 
   // Step 3: Medications
-  const [medications, setMedications] = useState([{ name: '', dose: '', frequency: '', concerns: '' }])
+  const [medications, setMedications] = useState(() => loadDraft()?.medications ?? [{ name: '', dose: '', frequency: '', concerns: '' }])
 
   // Step 4: Care Experience
-  const [careExp, setCareExp] = useState({
+  const [careExp, setCareExp] = useState(() => loadDraft()?.careExp ?? {
     clarity: '', feels_heard: '', num_doctors: '', desires_coordination: '',
   })
 
   // Step 5: Insurance
-  const [insuranceType, setInsuranceType] = useState('')
-  const [insuranceProvider, setInsuranceProvider] = useState('')
-  const [billingConcerns, setBillingConcerns] = useState('')
+  const [insuranceType, setInsuranceType] = useState(() => loadDraft()?.insuranceType ?? '')
+  const [insuranceProvider, setInsuranceProvider] = useState(() => loadDraft()?.insuranceProvider ?? '')
+  const [billingConcerns, setBillingConcerns] = useState(() => loadDraft()?.billingConcerns ?? '')
 
   // Step 6: Historical Notes
-  const [histNotes, setHistNotes] = useState([])
+  const [histNotes, setHistNotes] = useState(() => {
+    const d = loadDraft()
+    const notes = d?.histNotes ?? []
+    const pending = d?.inProgressNote
+    // If a partially-written note was saved, auto-commit it to the list on restore
+    if (pending && (pending.title?.trim() || hasNoteBodyContent(pending.noteBody))) {
+      return [...notes, { ...pending, title: pending.title?.trim() || '(Untitled note)', files: [] }]
+    }
+    return notes
+  })
   const [histDocs, setHistDocs] = useState([])
   const [noteFormOpen, setNoteFormOpen] = useState(false)
   const [noteFormKey, setNoteFormKey] = useState(0)
@@ -101,6 +125,76 @@ export default function IntakeForm() {
     setter(prev => prev.filter((_, i) => i !== index))
   }
 
+  // True when the form has any meaningful content worth saving
+  const hasDraftContent = !!(
+    basicInfo.first_name || basicInfo.last_name || basicInfo.phone || basicInfo.email ||
+    reasonForAdvocacy || goals.some(g => g.trim()) || overwhelmingFactors.length ||
+    checkedConditions.length || medications.some(m => m.name.trim()) || histNotes.length
+  )
+
+  // Auto-save to localStorage on every state change
+  useEffect(() => {
+    if (!hasDraftContent) {
+      localStorage.removeItem(DRAFT_KEY)
+      return
+    }
+    const draft = {
+      step, basicInfo, reasonForAdvocacy, goals, overwhelmingFactors, overwhelmingOtherText,
+      checkedConditions, customConditions, hospitalizations, providers, intakeAllergies,
+      medications, careExp, insuranceType, insuranceProvider, billingConcerns,
+      // File objects can't be serialized — notes are saved without their attached files
+      histNotes: histNotes.map(n => ({ ...n, files: [] })),
+      // Persist the open note editor so a partially-written note survives navigation
+      inProgressNote: (noteFormData.title.trim() || hasNoteBodyContent(noteFormData.noteBody))
+        ? { ...noteFormData, files: [] }
+        : null,
+    }
+    localStorage.setItem(DRAFT_KEY, JSON.stringify(draft))
+    setDraftSaved(true)
+    clearTimeout(draftTimerRef.current)
+    draftTimerRef.current = setTimeout(() => setDraftSaved(false), 2000)
+  }, [
+    step, basicInfo, reasonForAdvocacy, goals, overwhelmingFactors, overwhelmingOtherText,
+    checkedConditions, customConditions, hospitalizations, providers, intakeAllergies,
+    medications, careExp, insuranceType, insuranceProvider, billingConcerns, histNotes,
+    noteFormData,
+  ])
+
+  // Warn on browser close/reload when form has content
+  useEffect(() => {
+    const handler = e => {
+      if (!hasDraftContent) return
+      e.preventDefault()
+      e.returnValue = ''
+    }
+    window.addEventListener('beforeunload', handler)
+    return () => window.removeEventListener('beforeunload', handler)
+  }, [hasDraftContent])
+
+  function clearDraft() {
+    localStorage.removeItem(DRAFT_KEY)
+    setBasicInfo({ first_name: '', last_name: '', dob: '', phone: '', email: '', address: '', occupation: '',
+      emergency_contact_name: '', emergency_contact_phone: '', emergency_contact_relationship: '' })
+    setReasonForAdvocacy('')
+    setGoals(['', '', ''])
+    setOverwhelmingFactors([])
+    setOverwhelmingOtherText('')
+    setCheckedConditions([])
+    setCustomConditions('')
+    setHospitalizations([{ reason: '', hospital: '', admission_date: '', discharge_date: '' }])
+    setProviders([{ name: '', role: 'PCP', phone: '', practice: '' }])
+    setIntakeAllergies([])
+    setMedications([{ name: '', dose: '', frequency: '', concerns: '' }])
+    setCareExp({ clarity: '', feels_heard: '', num_doctors: '', desires_coordination: '' })
+    setInsuranceType('')
+    setInsuranceProvider('')
+    setBillingConcerns('')
+    setHistNotes([])
+    setHistDocs([])
+    setStep(0)
+    setDraftSaved(false)
+  }
+
   async function handleSubmit() {
     setSaving(true)
     try {
@@ -117,6 +211,7 @@ export default function IntakeForm() {
         emergency_contact_phone: basicInfo.emergency_contact_phone,
         emergency_contact_relationship: basicInfo.emergency_contact_relationship,
         status: 'active',
+        client_since: new Date().toISOString().split('T')[0],
         reason_for_advocacy: reasonForAdvocacy,
         overwhelming_factors: overwhelmingFactors.map(f =>
           f === 'Other' && overwhelmingOtherText.trim() ? `Other: ${overwhelmingOtherText.trim()}` : f
@@ -258,6 +353,7 @@ export default function IntakeForm() {
         if (docError) console.error('[handleSubmit] documents insert failed:', docError)
       }
 
+      localStorage.removeItem(DRAFT_KEY)
       navigate(`/patients/${patientId}`)
     } catch (err) {
       alert('Error saving patient: ' + err.message)
@@ -288,10 +384,27 @@ export default function IntakeForm() {
         <div className="flex items-center gap-2 mb-1">
           <ClipboardList size={18} className="text-primary" />
           <h1 className="section-title text-3xl">New Patient Intake</h1>
+          <span
+            className="font-body text-xs text-green-600 ml-1 transition-opacity duration-500"
+            style={{ opacity: draftSaved ? 1 : 0 }}
+          >
+            Draft saved
+          </span>
         </div>
-        <p className="font-body text-sm text-gray-400">
-          Complete this form to create a new patient profile
-        </p>
+        <div className="flex items-center gap-3">
+          <p className="font-body text-sm text-gray-400">
+            Complete this form to create a new patient profile
+          </p>
+          {hasDraftContent && (
+            <button
+              type="button"
+              onClick={clearDraft}
+              className="font-body text-xs text-gray-400 hover:text-red-500 transition-colors underline flex-shrink-0"
+            >
+              Clear draft
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Step progress */}
@@ -520,11 +633,13 @@ export default function IntakeForm() {
                         onChange={e => updateListItem(setProviders, i, 'role', e.target.value)}>
                         <option>PCP</option>
                         <option>Cardiologist</option>
+                        <option>Dentist</option>
                         <option>Neurologist</option>
                         <option>Oncologist</option>
                         <option>Orthopedist</option>
                         <option>Pulmonologist</option>
                         <option>Endocrinologist</option>
+                        <option>Gastroenterologist</option>
                         <option>Nephrologist</option>
                         <option>Psychiatrist</option>
                         <option>Other Specialist</option>
@@ -951,6 +1066,7 @@ export default function IntakeForm() {
           )}
         </div>
       </div>
+
     </div>
   )
 }

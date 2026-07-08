@@ -39,9 +39,24 @@ export default function Layout({ children }) {
   const patientMatch = useMatch('/patients/:id')
   const currentPatientId = patientMatch?.params?.id ?? null
 
+  const intakeMatch = useMatch('/intake')
   const [patientsOpen, setPatientsOpen] = useState(false)
   const [patients, setPatients] = useState([])
   const [installPrompt, setInstallPrompt] = useState(null)
+  const [pendingNav, setPendingNav] = useState(null)
+
+  // Check localStorage directly — IntakeForm saves there on every change
+  function hasDraft() {
+    return !!localStorage.getItem('sbha_intake_draft')
+  }
+
+  // Intercept NavLink clicks when on the intake form with unsaved content
+  function guardedNavigate(e, to) {
+    if (intakeMatch && to !== '/intake' && hasDraft()) {
+      e.preventDefault()
+      setPendingNav(to)
+    }
+  }
 
   useEffect(() => {
     const handler = e => {
@@ -95,6 +110,7 @@ export default function Layout({ children }) {
               to={to}
               end={end}
               title={label}
+              onClick={e => guardedNavigate(e, to)}
               className={({ isActive }) =>
                 `flex items-center gap-0 lg:gap-3 group-hover/sidebar:gap-3 py-2.5 rounded-xl font-body font-medium transition-all duration-150 min-h-[44px] w-full
                  px-0 lg:px-3 group-hover/sidebar:px-3 justify-center lg:justify-start group-hover/sidebar:justify-start
@@ -137,6 +153,7 @@ export default function Layout({ children }) {
                     <NavLink
                       key={p.id}
                       to={`/patients/${p.id}`}
+                      onClick={e => guardedNavigate(e, `/patients/${p.id}`)}
                       className={`block px-2 py-1.5 rounded-lg font-body text-xs font-medium truncate transition-colors whitespace-nowrap ${
                         currentPatientId === p.id
                           ? 'bg-primary-light text-primary'
@@ -156,6 +173,7 @@ export default function Layout({ children }) {
               key={to}
               to={to}
               title={label}
+              onClick={e => guardedNavigate(e, to)}
               className={({ isActive }) =>
                 `flex items-center gap-0 lg:gap-3 group-hover/sidebar:gap-3 py-2.5 rounded-xl font-body font-medium transition-all duration-150 min-h-[44px] w-full
                  px-0 lg:px-3 group-hover/sidebar:px-3 justify-center lg:justify-start group-hover/sidebar:justify-start
@@ -188,6 +206,7 @@ export default function Layout({ children }) {
           <NavLink
             to="/settings"
             title="Settings"
+            onClick={e => guardedNavigate(e, '/settings')}
             className={({ isActive }) =>
               `flex items-center gap-0 lg:gap-3 group-hover/sidebar:gap-3 py-2.5 rounded-xl font-body font-medium transition-all duration-150 min-h-[44px] w-full
                px-0 lg:px-3 group-hover/sidebar:px-3 justify-center lg:justify-start group-hover/sidebar:justify-start
@@ -218,6 +237,34 @@ export default function Layout({ children }) {
         {children}
       </main>
 
+      {/* ── Draft navigation guard modal ── */}
+      {pendingNav && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-8 max-w-md w-full shadow-xl">
+            <h3 className="font-heading text-xl text-gray-800 mb-3">Leave intake form?</h3>
+            <p className="font-body text-sm text-gray-600 mb-6">
+              You have an unsaved intake in progress. Your draft has been saved and will be restored when you return.
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button
+                type="button"
+                onClick={() => setPendingNav(null)}
+                className="btn-secondary"
+              >
+                Stay on form
+              </button>
+              <button
+                type="button"
+                onClick={() => { navigate(pendingNav); setPendingNav(null) }}
+                className="btn-primary"
+              >
+                Leave anyway
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Mobile Bottom Nav ── */}
       <nav className="md:hidden fixed bottom-0 left-0 right-0 z-50 bg-white border-t border-gray-100">
         <div className="flex items-stretch" style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}>
@@ -226,6 +273,7 @@ export default function Layout({ children }) {
               key={to}
               to={to}
               end={end}
+              onClick={e => guardedNavigate(e, to)}
               className={({ isActive }) =>
                 `flex-1 flex flex-col items-center justify-center py-2.5 gap-0.5 transition-colors min-h-[56px] ${
                   isActive ? 'text-primary' : 'text-gray-400'

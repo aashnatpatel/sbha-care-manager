@@ -183,6 +183,7 @@ export default function PatientProfile() {
   const [sessionModal, setSessionModal] = useState(null) // null | { duration_seconds, date, notes }
   const [savingSession, setSavingSession] = useState(false)
   const [sessionViewModal, setSessionViewModal] = useState(null) // null | session object
+  const [pastSessionModal, setPastSessionModal] = useState(false)
   const timerIntervalRef = useRef(null)
 
   // Session logs
@@ -1125,16 +1126,32 @@ export default function PatientProfile() {
     setSavingSession(false)
   }
 
+  async function savePastSession({ title, date, hours, minutes, notes }) {
+    setSavingSession(true)
+    const duration_seconds = (parseInt(hours, 10) || 0) * 3600 + (parseInt(minutes, 10) || 0) * 60
+    const { data } = await supabase.from('session_logs').insert({
+      patient_id: id,
+      session_date: date,
+      duration_seconds,
+      title: title.trim() || null,
+      notes: notes.trim() || null,
+    }).select().single()
+    if (data) setSessionLogs(prev => [data, ...prev].sort((a, b) => b.session_date.localeCompare(a.session_date)))
+    setPastSessionModal(false)
+    setSavingSession(false)
+  }
+
   async function deleteSession(sessionId) {
     await supabase.from('session_logs').delete().eq('id', sessionId)
     setSessionLogs(prev => prev.filter(s => s.id !== sessionId))
   }
 
-  async function updateSession(sessionId, { date, duration_seconds, notes }) {
+  async function updateSession(sessionId, { date, duration_seconds, notes, title }) {
     setSavingSession(true)
     const { data } = await supabase.from('session_logs').update({
       session_date: date,
       duration_seconds,
+      title: title || null,
       notes: notes || null,
     }).eq('id', sessionId).select().single()
     if (data) setSessionLogs(prev => prev.map(s => s.id === sessionId ? data : s))
@@ -1533,14 +1550,24 @@ export default function PatientProfile() {
               </button>
             </>
           ) : (
-            <button
-              onClick={startTimer}
-              className="flex items-center gap-1.5 text-xs font-body text-gray-500 border border-gray-200 rounded-lg px-2.5 py-1 transition-all"
-              onMouseEnter={e => { e.currentTarget.style.color = '#4F7EE0'; e.currentTarget.style.borderColor = 'rgba(79,126,224,0.3)' }}
-              onMouseLeave={e => { e.currentTarget.style.color = ''; e.currentTarget.style.borderColor = '' }}
-            >
-              <Clock size={12} /> Start Session
-            </button>
+            <>
+              <button
+                onClick={startTimer}
+                className="flex items-center gap-1.5 text-xs font-body text-gray-500 border border-gray-200 rounded-lg px-2.5 py-1 transition-all"
+                onMouseEnter={e => { e.currentTarget.style.color = '#4F7EE0'; e.currentTarget.style.borderColor = 'rgba(79,126,224,0.3)' }}
+                onMouseLeave={e => { e.currentTarget.style.color = ''; e.currentTarget.style.borderColor = '' }}
+              >
+                <Clock size={12} /> Start Session
+              </button>
+              <button
+                onClick={() => setPastSessionModal(true)}
+                className="flex items-center gap-1 text-xs font-body text-gray-400 border border-gray-200 rounded-lg px-2.5 py-1 transition-all"
+                onMouseEnter={e => { e.currentTarget.style.color = '#4F7EE0'; e.currentTarget.style.borderColor = 'rgba(79,126,224,0.3)' }}
+                onMouseLeave={e => { e.currentTarget.style.color = ''; e.currentTarget.style.borderColor = '' }}
+              >
+                <Plus size={11} /> Add Past Session
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -2119,7 +2146,7 @@ export default function PatientProfile() {
               <ItemForm
                 fields={[
                   { key: 'name', label: 'Provider Name', required: true },
-                  { key: 'role', label: 'Role', type: 'select', options: ['PCP', 'Cardiologist', 'Neurologist', 'Oncologist', 'Psychiatrist', 'Physical Therapist', 'Occupational Therapist', 'Pharmacist', 'Specialist'] },
+                  { key: 'role', label: 'Role', type: 'select', options: ['PCP', 'Cardiologist', 'Dentist', 'Gastroenterologist', 'Neurologist', 'Oncologist', 'Psychiatrist', 'Physical Therapist', 'Occupational Therapist', 'Pharmacist', 'Specialist'] },
                   { key: 'practice', label: 'Practice' },
                   { key: 'phone', label: 'Phone' },
                 ]}
@@ -2138,7 +2165,7 @@ export default function PatientProfile() {
                       <ItemForm
                         fields={[
                           { key: 'name', label: 'Provider Name', required: true },
-                          { key: 'role', label: 'Role', type: 'select', options: ['PCP', 'Cardiologist', 'Neurologist', 'Oncologist', 'Psychiatrist', 'Physical Therapist', 'Occupational Therapist', 'Pharmacist', 'Specialist'] },
+                          { key: 'role', label: 'Role', type: 'select', options: ['PCP', 'Cardiologist', 'Dentist', 'Gastroenterologist', 'Neurologist', 'Oncologist', 'Psychiatrist', 'Physical Therapist', 'Occupational Therapist', 'Pharmacist', 'Specialist'] },
                           { key: 'practice', label: 'Practice' },
                           { key: 'phone', label: 'Phone' },
                         ]}
@@ -2759,6 +2786,15 @@ export default function PatientProfile() {
                   )}
                 </h3>
               </div>
+              <button
+                onClick={e => { e.stopPropagation(); setPastSessionModal(true) }}
+                className="p-1 rounded-lg text-gray-400 transition-colors"
+                onMouseEnter={e => { e.currentTarget.style.color = '#4F7EE0'; e.currentTarget.style.backgroundColor = '#EEF2FB' }}
+                onMouseLeave={e => { e.currentTarget.style.color = ''; e.currentTarget.style.backgroundColor = '' }}
+                title="Add past session"
+              >
+                <Plus size={14} />
+              </button>
             </div>
             <div
               className={`grid ${collapsedCards.session_history ? 'grid-rows-[0fr]' : 'grid-rows-[1fr]'}`}
@@ -2781,6 +2817,7 @@ export default function PatientProfile() {
                               <span className="font-body text-xs font-semibold text-gray-700">{format(parseISO(s.session_date), 'MMM d, yyyy')}</span>
                               <span className="font-body text-xs font-semibold text-primary">{formatDuration(s.duration_seconds)}</span>
                             </div>
+                            {s.title && <p className="font-body text-xs font-semibold text-gray-700 mt-0.5 truncate">{s.title}</p>}
                             {s.notes && <p className="font-body text-xs text-gray-400 mt-0.5 line-clamp-2">{s.notes}</p>}
                           </div>
                           <ChevronRight size={13} className="text-gray-300 flex-shrink-0 mt-0.5" />
@@ -3152,6 +3189,15 @@ export default function PatientProfile() {
           saving={savingSession}
           onClose={() => setSessionModal(null)}
           onSave={saveSession}
+        />
+      )}
+
+      {/* ── ADD PAST SESSION MODAL ── */}
+      {pastSessionModal && (
+        <PastSessionModal
+          saving={savingSession}
+          onClose={() => setPastSessionModal(false)}
+          onSave={savePastSession}
         />
       )}
 
@@ -4041,7 +4087,7 @@ const INSURANCE_TYPES_LIST = ['Medicare', 'Medicaid', 'Medicare + Medicaid', 'Pr
 
 function SessionViewModal({ session, onClose, onUpdate, onDelete, saving }) {
   const [mode, setMode] = useState('view')
-  const [draft, setDraft] = useState({ date: session.session_date, notes: session.notes || '' })
+  const [draft, setDraft] = useState({ date: session.session_date, title: session.title || '', notes: session.notes || '' })
   const [draftH, setDraftH] = useState(() => Math.floor(session.duration_seconds / 3600))
   const [draftM, setDraftM] = useState(() => Math.floor((session.duration_seconds % 3600) / 60))
   const [draftS, setDraftS] = useState(() => session.duration_seconds % 60)
@@ -4087,6 +4133,12 @@ function SessionViewModal({ session, onClose, onUpdate, onDelete, saving }) {
                 <p className="font-body text-xs font-semibold text-gray-400 uppercase tracking-wider">Date</p>
                 <p className="font-body text-sm text-gray-700">{format(parseISO(session.session_date), 'MMMM d, yyyy')}</p>
               </div>
+              {session.title && (
+                <div className="space-y-1">
+                  <p className="font-body text-xs font-semibold text-gray-400 uppercase tracking-wider">Title</p>
+                  <p className="font-body text-sm font-semibold text-gray-800">{session.title}</p>
+                </div>
+              )}
               {session.notes ? (
                 <div className="space-y-1">
                   <p className="font-body text-xs font-semibold text-gray-400 uppercase tracking-wider">Notes</p>
@@ -4098,6 +4150,11 @@ function SessionViewModal({ session, onClose, onUpdate, onDelete, saving }) {
             </>
           ) : (
             <>
+              <div>
+                <label className="label">Title <span className="text-gray-400 font-normal">(optional)</span></label>
+                <input type="text" className="input" placeholder="e.g. Phone call re: medications"
+                  value={draft.title} onChange={e => setDraft(d => ({ ...d, title: e.target.value }))} />
+              </div>
               <div>
                 <label className="label">Date</label>
                 <input type="date" className="input" value={draft.date} onChange={e => setDraft(d => ({ ...d, date: e.target.value }))} />
@@ -4216,6 +4273,113 @@ function SessionSaveModal({ modal, onClose, onSave, saving }) {
             {saving ? 'Saving…' : 'Save Session'}
           </button>
         </div>
+      </div>
+    </div>
+  )
+}
+
+function PastSessionModal({ onClose, onSave, saving }) {
+  const today = format(new Date(), 'yyyy-MM-dd')
+  const [title, setTitle] = useState('')
+  const [date, setDate] = useState(today)
+  const [hours, setHours] = useState('')
+  const [minutes, setMinutes] = useState('')
+  const [notes, setNotes] = useState('')
+
+  useEffect(() => {
+    const handler = e => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [onClose])
+
+  const canSave = date && (parseInt(hours, 10) > 0 || parseInt(minutes, 10) > 0)
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+      <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" />
+      <div className="relative bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl w-full sm:max-w-md flex flex-col overflow-hidden max-h-[95vh] sm:max-h-none">
+
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 flex-shrink-0">
+          <h2 className="font-heading text-xl font-semibold text-gray-800">Add Past Session</h2>
+          <button onClick={onClose} className="p-1.5 text-gray-400 hover:text-gray-600 transition-colors"><X size={18} /></button>
+        </div>
+
+        {/* Body */}
+        <div className="px-6 pt-5 pb-20 sm:pb-5 space-y-4 overflow-y-auto flex-1">
+          <div>
+            <label className="label">Title <span className="text-gray-400 font-normal">(optional)</span></label>
+            <input
+              type="text"
+              className="input"
+              placeholder="e.g. Phone call re: medications"
+              value={title}
+              onChange={e => setTitle(e.target.value)}
+              autoFocus
+            />
+          </div>
+          <div>
+            <label className="label">Date</label>
+            <input
+              type="date"
+              className="input"
+              value={date}
+              onChange={e => setDate(e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="label">Duration</label>
+            <div className="flex items-center gap-3">
+              <div className="flex-1">
+                <input
+                  type="number"
+                  min={0}
+                  className="input text-center"
+                  placeholder="0"
+                  value={hours}
+                  onChange={e => setHours(e.target.value)}
+                />
+                <p className="font-body text-xs text-center text-gray-400 mt-0.5">hours</p>
+              </div>
+              <span className="font-heading text-xl text-gray-300 pb-5">:</span>
+              <div className="flex-1">
+                <input
+                  type="number"
+                  min={0}
+                  max={59}
+                  className="input text-center"
+                  placeholder="0"
+                  value={minutes}
+                  onChange={e => setMinutes(e.target.value)}
+                />
+                <p className="font-body text-xs text-center text-gray-400 mt-0.5">min</p>
+              </div>
+            </div>
+          </div>
+          <div>
+            <label className="label">Notes <span className="text-gray-400 font-normal">(optional)</span></label>
+            <textarea
+              className="input resize-none"
+              rows={3}
+              placeholder="What was discussed or worked on?"
+              value={notes}
+              onChange={e => setNotes(e.target.value)}
+            />
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="flex gap-2 px-6 pt-4 pb-6 sm:py-4 border-t border-gray-100 flex-shrink-0">
+          <button onClick={onClose} className="btn-ghost flex-1 py-2 text-sm">Cancel</button>
+          <button
+            onClick={() => onSave({ title, date, hours, minutes, notes })}
+            disabled={saving || !canSave}
+            className="btn-primary flex-1 py-2 text-sm disabled:opacity-50"
+          >
+            {saving ? 'Saving…' : 'Save Session'}
+          </button>
+        </div>
+
       </div>
     </div>
   )
