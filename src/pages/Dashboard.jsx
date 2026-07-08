@@ -7,7 +7,36 @@ import {
   Pin, Calendar, FileText, File, Image, Plus, Clock,
   ChevronRight, ChevronLeft, Users, ChevronDown, ChevronUp,
   Search, User, X, Edit3, Trash2, ExternalLink, CalendarPlus,
+  ClipboardList, Square,
 } from 'lucide-react'
+
+function parseSmartDate(input) {
+  if (!input || !input.trim()) return null
+  const s = input.trim()
+  const now = new Date()
+  const currentYear = now.getFullYear()
+  const todayStr = format(now, 'yyyy-MM-dd')
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return isNaN(new Date(s + 'T12:00:00').getTime()) ? null : s
+  const MONTHS = {
+    jan:1,january:1,feb:2,february:2,mar:3,march:3,apr:4,april:4,may:5,
+    jun:6,june:6,jul:7,july:7,aug:8,august:8,sep:9,sept:9,september:9,
+    oct:10,october:10,nov:11,november:11,dec:12,december:12,
+  }
+  let month, day, year = null
+  const m1 = s.match(/^([a-zA-Z]+)\s+(\d{1,2})(?:\s+(\d{4}))?$/)
+  if (m1) { month = MONTHS[m1[1].toLowerCase()]; day = parseInt(m1[2]); year = m1[3] ? parseInt(m1[3]) : null }
+  if (!month) {
+    const m2 = s.match(/^(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{4}))?$/)
+    if (m2) { month = parseInt(m2[1]); day = parseInt(m2[2]); year = m2[3] ? parseInt(m2[3]) : null }
+  }
+  if (!month || !day || month < 1 || month > 12 || day < 1 || day > 31) return null
+  if (!year) {
+    const thisYear = `${currentYear}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`
+    year = thisYear < todayStr ? currentYear + 1 : currentYear
+  }
+  const result = `${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`
+  return isNaN(new Date(result + 'T12:00:00').getTime()) ? null : result
+}
 
 const APPT_TYPES = ['Doctor Appointment', 'Patient Meeting', 'Family Meeting', 'SBHA General Event', 'Other']
 
@@ -74,9 +103,21 @@ export default function Dashboard() {
   const [savingEvent, setSavingEvent] = useState(false)
   const [apptModal, setApptModal] = useState(null) // null | appt object
   const [savingApptUpdate, setSavingApptUpdate] = useState(false)
+  const [todos, setTodos] = useState([])
+  const [showTodoSection, setShowTodoSection] = useState(false)
+  const [newTodoDashTitle, setNewTodoDashTitle] = useState('')
+  const [newTodoDashDueDate, setNewTodoDashDueDate] = useState('')
+  const [showNewDashTodoPicker, setShowNewDashTodoPicker] = useState(false)
+  const [newDashTodoDueDateText, setNewDashTodoDueDateText] = useState('')
+  const [editingDashTodoId, setEditingDashTodoId] = useState(null)
+  const [editingDashTitle, setEditingDashTitle] = useState('')
+  const [editingDashDueTodoId, setEditingDashDueTodoId] = useState(null)
+  const [editingDashDueText, setEditingDashDueText] = useState('')
+  const [patientDropdownId, setPatientDropdownId] = useState(null)
 
   useEffect(() => { loadDashboardData() }, [])
   useEffect(() => { loadApptsForDate(viewDate) }, [viewDate])
+  useEffect(() => { loadTodos() }, [])
 
   async function loadDashboardData() {
     setLoading(true)
@@ -225,6 +266,60 @@ export default function Dashboard() {
     await supabase.from('patients').delete().eq('id', patientId)
     setDeletedPatients(prev => prev.filter(p => p.id !== patientId))
     setConfirmPermDelete(null)
+  }
+
+  async function loadTodos() {
+    const { data } = await supabase
+      .from('todos')
+      .select('*, patients(first_name, last_name)')
+      .order('created_at', { ascending: false })
+    setTodos(data || [])
+  }
+
+  async function addTodoDash() {
+    if (!newTodoDashTitle.trim()) return
+    const { data } = await supabase.from('todos').insert({
+      user_id: session.user.id,
+      title: newTodoDashTitle.trim(),
+      due_date: newTodoDashDueDate || null,
+    }).select('*, patients(first_name, last_name)').single()
+    if (data) setTodos(prev => [...prev, data])
+    setNewTodoDashTitle('')
+    setNewTodoDashDueDate('')
+    setShowNewDashTodoPicker(false)
+    setNewDashTodoDueDateText('')
+  }
+
+  async function updateTodoDash(todoId, newTitle) {
+    if (!newTitle.trim()) { setEditingDashTodoId(null); return }
+    const { data } = await supabase.from('todos').update({ title: newTitle.trim() }).eq('id', todoId).select('*, patients(first_name, last_name)').single()
+    if (data) setTodos(prev => prev.map(t => t.id === todoId ? data : t))
+    setEditingDashTodoId(null)
+  }
+
+  async function updateTodoDueDateDash(todoId, newDate) {
+    const { data } = await supabase.from('todos').update({ due_date: newDate || null }).eq('id', todoId).select('*, patients(first_name, last_name)').single()
+    if (data) setTodos(prev => prev.map(t => t.id === todoId ? data : t))
+    setEditingDashDueTodoId(null)
+  }
+
+  async function assignTodoDashPatient(todoId, patientId) {
+    const { data } = await supabase.from('todos').update({ patient_id: patientId || null }).eq('id', todoId).select('*, patients(first_name, last_name)').single()
+    if (data) setTodos(prev => prev.map(t => t.id === todoId ? data : t))
+    setPatientDropdownId(null)
+  }
+
+  async function toggleTodoDash(todoId, completed) {
+    const { data } = await supabase.from('todos').update({
+      completed,
+      completed_at: completed ? new Date().toISOString() : null,
+    }).eq('id', todoId).select('*, patients(first_name, last_name)').single()
+    if (data) setTodos(prev => prev.map(t => t.id === todoId ? data : t))
+  }
+
+  async function deleteTodoDash(todoId) {
+    await supabase.from('todos').delete().eq('id', todoId)
+    setTodos(prev => prev.filter(t => t.id !== todoId))
   }
 
   const q = searchQuery.trim().toLowerCase()
@@ -424,6 +519,198 @@ export default function Dashboard() {
                   </div>
                 </div>
               ))}
+            </div>
+          )
+        })()}
+      </section>
+
+      {/* To-Do */}
+      <section className="mb-6 md:mb-8">
+        <div className="flex items-center gap-2 mb-3">
+          <button onClick={() => setShowTodoSection(v => !v)} className="flex items-center gap-2">
+            {showTodoSection ? <ChevronDown size={15} className="text-gray-400" /> : <ChevronRight size={15} className="text-gray-400" />}
+            <ClipboardList size={15} className="text-gray-500" />
+            <h2 className="font-body text-sm font-semibold text-gray-500 uppercase tracking-wider">To-Do</h2>
+          </button>
+          {todos.filter(t => !t.completed).length > 0 && (
+            <span className="tag bg-primary-light text-primary">{todos.filter(t => !t.completed).length}</span>
+          )}
+        </div>
+
+        {showTodoSection && (() => {
+          const today = format(new Date(), 'yyyy-MM-dd')
+          const activeDashTodos = todos.filter(t => !t.completed).sort((a, b) => {
+            const aOv = a.due_date && a.due_date < today
+            const bOv = b.due_date && b.due_date < today
+            if (aOv && !bOv) return -1
+            if (!aOv && bOv) return 1
+            if (!a.due_date && !b.due_date) return 0
+            if (!a.due_date) return 1
+            if (!b.due_date) return -1
+            return a.due_date.localeCompare(b.due_date)
+          })
+          return (
+            <div className="card py-3 px-4">
+              {/* Inline add input */}
+              <div className="flex items-center gap-2 border-b border-transparent focus-within:border-primary pb-1 mb-3 transition-colors">
+                <input
+                  className="flex-1 font-body text-sm text-gray-700 placeholder-gray-300 bg-transparent border-0 outline-none min-w-0"
+                  placeholder="Add a to-do..."
+                  value={newTodoDashTitle}
+                  onChange={e => setNewTodoDashTitle(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') addTodoDash() }}
+                />
+                {newTodoDashDueDate && (
+                  <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-primary-light text-primary font-body text-[10px] font-semibold flex-shrink-0">
+                    {format(new Date(newTodoDashDueDate + 'T12:00:00'), 'MMM d')}
+                    <button type="button" onClick={() => setNewTodoDashDueDate('')} className="text-primary/60 hover:text-primary leading-none">
+                      <X size={9} />
+                    </button>
+                  </span>
+                )}
+                <div className="flex-shrink-0">
+                  {showNewDashTodoPicker ? (
+                    <input
+                      autoFocus
+                      type="text"
+                      placeholder="Jun 15"
+                      className="font-body text-xs bg-transparent border-b border-primary outline-none text-gray-600 w-16"
+                      value={newDashTodoDueDateText}
+                      onChange={e => setNewDashTodoDueDateText(e.target.value)}
+                      onBlur={() => {
+                        const parsed = parseSmartDate(newDashTodoDueDateText)
+                        if (parsed) setNewTodoDashDueDate(parsed)
+                        setShowNewDashTodoPicker(false)
+                      }}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') {
+                          const parsed = parseSmartDate(newDashTodoDueDateText)
+                          if (parsed) setNewTodoDashDueDate(parsed)
+                          setShowNewDashTodoPicker(false)
+                        }
+                        if (e.key === 'Escape') setShowNewDashTodoPicker(false)
+                      }}
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowNewDashTodoPicker(true)
+                        setNewDashTodoDueDateText(newTodoDashDueDate ? format(new Date(newTodoDashDueDate + 'T12:00:00'), 'MMM d') : '')
+                      }}
+                      className={`transition-colors ${newTodoDashDueDate ? 'text-primary' : 'text-gray-300 hover:text-primary'}`}
+                    >
+                      <Calendar size={14} />
+                    </button>
+                  )}
+                </div>
+              </div>
+              {activeDashTodos.length === 0 ? (
+                <p className="font-body text-sm text-gray-400">No active to-dos</p>
+              ) : (
+                <div className="space-y-0">
+                  {activeDashTodos.map(todo => {
+                    const overdue = todo.due_date && todo.due_date < today
+                    return (
+                      <div key={todo.id} className="flex items-center gap-3 group py-2 border-b border-gray-50 last:border-0">
+                        <button onClick={() => toggleTodoDash(todo.id, true)} className="flex-shrink-0 text-gray-300 hover:text-primary transition-colors">
+                          <Square size={15} />
+                        </button>
+                        <div className="flex-1 min-w-0">
+                          {editingDashTodoId === todo.id ? (
+                            <input
+                              autoFocus
+                              className="font-body text-sm text-gray-700 w-full bg-transparent border-0 border-b border-primary outline-none"
+                              value={editingDashTitle}
+                              onChange={e => setEditingDashTitle(e.target.value)}
+                              onBlur={() => updateTodoDash(todo.id, editingDashTitle)}
+                              onKeyDown={e => {
+                                if (e.key === 'Enter') updateTodoDash(todo.id, editingDashTitle)
+                                if (e.key === 'Escape') setEditingDashTodoId(null)
+                              }}
+                            />
+                          ) : (
+                            <span
+                              className="font-body text-sm text-gray-700 cursor-text block truncate"
+                              onClick={() => { setEditingDashTodoId(todo.id); setEditingDashTitle(todo.title) }}
+                            >
+                              {todo.title}
+                            </span>
+                          )}
+                          {todo.patients && (
+                            <span className="px-2 py-0.5 rounded-full bg-primary-light text-primary font-body text-[10px] font-semibold inline-block mt-0.5">
+                              {todo.patients.first_name} {todo.patients.last_name}
+                            </span>
+                          )}
+                        </div>
+                        {/* Due date */}
+                        {editingDashDueTodoId === todo.id ? (
+                          <input
+                            type="text"
+                            autoFocus
+                            placeholder="Jun 15"
+                            className="font-body text-xs text-gray-500 bg-transparent border-b border-primary outline-none w-16 flex-shrink-0"
+                            value={editingDashDueText}
+                            onChange={e => setEditingDashDueText(e.target.value)}
+                            onBlur={() => {
+                              const parsed = parseSmartDate(editingDashDueText)
+                              parsed ? updateTodoDueDateDash(todo.id, parsed) : setEditingDashDueTodoId(null)
+                            }}
+                            onKeyDown={e => {
+                              if (e.key === 'Enter') {
+                                const parsed = parseSmartDate(editingDashDueText)
+                                parsed ? updateTodoDueDateDash(todo.id, parsed) : setEditingDashDueTodoId(null)
+                              }
+                              if (e.key === 'Escape') setEditingDashDueTodoId(null)
+                            }}
+                          />
+                        ) : (
+                          <button
+                            onClick={() => {
+                              setEditingDashDueTodoId(todo.id)
+                              setEditingDashDueText(todo.due_date ? format(new Date(todo.due_date + 'T12:00:00'), 'MMM d') : '')
+                            }}
+                            className={`font-body text-xs flex-shrink-0 transition-opacity ${overdue ? 'text-red-500 font-semibold' : todo.due_date ? 'text-gray-400' : 'text-gray-300 opacity-0 group-hover:opacity-100'}`}
+                          >
+                            {todo.due_date ? format(new Date(todo.due_date + 'T12:00:00'), 'MMM d') : 'date'}
+                          </button>
+                        )}
+                        {/* Patient assign */}
+                        <div className="relative flex-shrink-0">
+                          <button
+                            onClick={() => setPatientDropdownId(patientDropdownId === todo.id ? null : todo.id)}
+                            className="text-gray-300 hover:text-primary transition-colors opacity-0 group-hover:opacity-100"
+                          >
+                            <User size={13} />
+                          </button>
+                          {patientDropdownId === todo.id && (
+                            <div className="absolute right-0 top-6 z-10 bg-white border border-gray-100 rounded-xl shadow-lg py-1 min-w-[160px]">
+                              <button
+                                className="w-full text-left px-3 py-1.5 font-body text-xs text-gray-500 hover:bg-gray-50"
+                                onClick={() => assignTodoDashPatient(todo.id, null)}
+                              >
+                                No patient
+                              </button>
+                              {patients.map(p => (
+                                <button
+                                  key={p.id}
+                                  className="w-full text-left px-3 py-1.5 font-body text-xs text-gray-700 hover:bg-primary-light hover:text-primary"
+                                  onClick={() => assignTodoDashPatient(todo.id, p.id)}
+                                >
+                                  {p.first_name} {p.last_name}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                        <button onClick={() => deleteTodoDash(todo.id)} className="flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity text-gray-300 hover:text-red-400">
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
             </div>
           )
         })()}
@@ -914,7 +1201,6 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Add Event Modal */}
       {showAddModal && (
         <AddEventModal
           onClose={() => setShowAddModal(false)}
@@ -1395,3 +1681,4 @@ function AddEventModal({ onClose, onSave, saving, defaultDate, patients }) {
     </div>
   )
 }
+

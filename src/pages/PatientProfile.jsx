@@ -22,6 +22,34 @@ import { Color } from '@tiptap/extension-color'
 import { TextStyle } from '@tiptap/extension-text-style'
 import { Typography } from '@tiptap/extension-typography'
 
+function parseSmartDate(input) {
+  if (!input || !input.trim()) return null
+  const s = input.trim()
+  const now = new Date()
+  const currentYear = now.getFullYear()
+  const todayStr = format(now, 'yyyy-MM-dd')
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return isNaN(new Date(s + 'T12:00:00').getTime()) ? null : s
+  const MONTHS = {
+    jan:1,january:1,feb:2,february:2,mar:3,march:3,apr:4,april:4,may:5,
+    jun:6,june:6,jul:7,july:7,aug:8,august:8,sep:9,sept:9,september:9,
+    oct:10,october:10,nov:11,november:11,dec:12,december:12,
+  }
+  let month, day, year = null
+  const m1 = s.match(/^([a-zA-Z]+)\s+(\d{1,2})(?:\s+(\d{4}))?$/)
+  if (m1) { month = MONTHS[m1[1].toLowerCase()]; day = parseInt(m1[2]); year = m1[3] ? parseInt(m1[3]) : null }
+  if (!month) {
+    const m2 = s.match(/^(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{4}))?$/)
+    if (m2) { month = parseInt(m2[1]); day = parseInt(m2[2]); year = m2[3] ? parseInt(m2[3]) : null }
+  }
+  if (!month || !day || month < 1 || month > 12 || day < 1 || day > 31) return null
+  if (!year) {
+    const thisYear = `${currentYear}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`
+    year = thisYear < todayStr ? currentYear + 1 : currentYear
+  }
+  const result = `${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`
+  return isNaN(new Date(result + 'T12:00:00').getTime()) ? null : result
+}
+
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 function formatTime(t) {
   if (!t) return ''
@@ -189,6 +217,18 @@ export default function PatientProfile() {
   // Session logs
   const [sessionLogs, setSessionLogs] = useState([])
 
+  // To-Do
+  const [todos, setTodos] = useState([])
+  const [newTodoTitle, setNewTodoTitle] = useState('')
+  const [newTodoDueDate, setNewTodoDueDate] = useState('')
+  const [showNewTodoPicker, setShowNewTodoPicker] = useState(false)
+  const [newTodoDueDateText, setNewTodoDueDateText] = useState('')
+  const [editingTodoId, setEditingTodoId] = useState(null)
+  const [editingTitle, setEditingTitle] = useState('')
+  const [editingDueTodoId, setEditingDueTodoId] = useState(null)
+  const [editingDueText, setEditingDueText] = useState('')
+  const [showCompletedTodos, setShowCompletedTodos] = useState(false)
+
   // AI
   const [aiSummary, setAiSummary] = useState('')
   const [aiLoading, setAiLoading] = useState(false)
@@ -307,6 +347,11 @@ export default function PatientProfile() {
     }, 1000)
     return () => clearInterval(timerIntervalRef.current)
   }, [timerRunning, id])
+
+  useEffect(() => {
+    if (!id) return
+    supabase.from('todos').select('*').eq('patient_id', id).order('created_at').then(({ data }) => setTodos(data || []))
+  }, [id])
 
   useEffect(() => {
     if (!showActionsMenu) return
@@ -1165,6 +1210,48 @@ export default function PatientProfile() {
     setSessionViewModal(null)
   }
 
+  // ── To-Do CRUD ────────────────────────────────────────────────
+  async function addTodo() {
+    if (!newTodoTitle.trim()) return
+    const { data } = await supabase.from('todos').insert({
+      patient_id: id,
+      user_id: session.user.id,
+      title: newTodoTitle.trim(),
+      due_date: newTodoDueDate || null,
+    }).select().single()
+    if (data) setTodos(prev => [...prev, data])
+    setNewTodoTitle('')
+    setNewTodoDueDate('')
+    setShowNewTodoPicker(false)
+    setNewTodoDueDateText('')
+  }
+
+  async function updateTodoTitle(todoId, newTitle) {
+    if (!newTitle.trim()) { setEditingTodoId(null); return }
+    const { data } = await supabase.from('todos').update({ title: newTitle.trim() }).eq('id', todoId).select().single()
+    if (data) setTodos(prev => prev.map(t => t.id === todoId ? data : t))
+    setEditingTodoId(null)
+  }
+
+  async function updateTodoDueDate(todoId, newDate) {
+    const { data } = await supabase.from('todos').update({ due_date: newDate || null }).eq('id', todoId).select().single()
+    if (data) setTodos(prev => prev.map(t => t.id === todoId ? data : t))
+    setEditingDueTodoId(null)
+  }
+
+  async function toggleTodo(todoId, completed) {
+    const { data } = await supabase.from('todos').update({
+      completed,
+      completed_at: completed ? new Date().toISOString() : null,
+    }).eq('id', todoId).select().single()
+    if (data) setTodos(prev => prev.map(t => t.id === todoId ? data : t))
+  }
+
+  async function deleteTodo(todoId) {
+    await supabase.from('todos').delete().eq('id', todoId)
+    setTodos(prev => prev.filter(t => t.id !== todoId))
+  }
+
   // ── Medication List Export ─────────────────────────────────────
   function printMedicationList() {
     const patientName = `${patient.first_name} ${patient.last_name}`
@@ -1879,6 +1966,190 @@ export default function PatientProfile() {
               </div>
             )}
           </SectionCard>
+
+          {/* To-Do */}
+          {(() => {
+            const today = format(new Date(), 'yyyy-MM-dd')
+            const activeTodos = todos
+              .filter(t => !t.completed)
+              .sort((a, b) => {
+                if (!a.due_date && !b.due_date) return 0
+                if (!a.due_date) return 1
+                if (!b.due_date) return -1
+                return a.due_date.localeCompare(b.due_date)
+              })
+            const completedTodos = todos
+              .filter(t => t.completed)
+              .sort((a, b) => (b.completed_at || '').localeCompare(a.completed_at || ''))
+            return (
+              <SectionCard
+                title="To-Do"
+                icon={<ClipboardList size={15} />}
+                collapsed={!!collapsedCards.todos}
+                onToggle={() => toggleCard('todos')}
+              >
+                {/* Inline add input */}
+                <div className="flex items-center gap-2 border-b border-transparent focus-within:border-primary pb-1 mb-3 transition-colors">
+                  <input
+                    className="flex-1 font-body text-sm text-gray-700 placeholder-gray-300 bg-transparent border-0 outline-none min-w-0"
+                    placeholder="Add a to-do..."
+                    value={newTodoTitle}
+                    onChange={e => setNewTodoTitle(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') addTodo() }}
+                  />
+                  {newTodoDueDate && (
+                    <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-primary-light text-primary font-body text-[10px] font-semibold flex-shrink-0">
+                      {format(new Date(newTodoDueDate + 'T12:00:00'), 'MMM d')}
+                      <button type="button" onClick={() => setNewTodoDueDate('')} className="text-primary/60 hover:text-primary leading-none">
+                        <X size={9} />
+                      </button>
+                    </span>
+                  )}
+                  <div className="flex-shrink-0">
+                    {showNewTodoPicker ? (
+                      <input
+                        autoFocus
+                        type="text"
+                        placeholder="Jun 15"
+                        className="font-body text-xs bg-transparent border-b border-primary outline-none text-gray-600 w-16"
+                        value={newTodoDueDateText}
+                        onChange={e => setNewTodoDueDateText(e.target.value)}
+                        onBlur={() => {
+                          const parsed = parseSmartDate(newTodoDueDateText)
+                          if (parsed) setNewTodoDueDate(parsed)
+                          setShowNewTodoPicker(false)
+                        }}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') {
+                            const parsed = parseSmartDate(newTodoDueDateText)
+                            if (parsed) setNewTodoDueDate(parsed)
+                            setShowNewTodoPicker(false)
+                          }
+                          if (e.key === 'Escape') setShowNewTodoPicker(false)
+                        }}
+                      />
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowNewTodoPicker(true)
+                          setNewTodoDueDateText(newTodoDueDate ? format(new Date(newTodoDueDate + 'T12:00:00'), 'MMM d') : '')
+                        }}
+                        className={`transition-colors ${newTodoDueDate ? 'text-primary' : 'text-gray-300 hover:text-primary'}`}
+                      >
+                        <Calendar size={14} />
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Active todos */}
+                {activeTodos.length === 0 ? (
+                  <p className="font-body text-xs text-gray-400">No to-dos yet</p>
+                ) : (
+                  <div className="space-y-1.5">
+                    {activeTodos.map(todo => {
+                      const overdue = todo.due_date && todo.due_date < today
+                      return (
+                        <div key={todo.id} className="flex items-center gap-2 group py-0.5">
+                          <button onClick={() => toggleTodo(todo.id, true)} className="flex-shrink-0 text-gray-300 hover:text-primary transition-colors">
+                            <Square size={14} />
+                          </button>
+                          {editingTodoId === todo.id ? (
+                            <input
+                              autoFocus
+                              className="font-body text-sm text-gray-700 flex-1 min-w-0 bg-transparent border-0 border-b border-primary outline-none"
+                              value={editingTitle}
+                              onChange={e => setEditingTitle(e.target.value)}
+                              onBlur={() => updateTodoTitle(todo.id, editingTitle)}
+                              onKeyDown={e => {
+                                if (e.key === 'Enter') updateTodoTitle(todo.id, editingTitle)
+                                if (e.key === 'Escape') setEditingTodoId(null)
+                              }}
+                            />
+                          ) : (
+                            <span
+                              className="font-body text-sm text-gray-700 flex-1 min-w-0 truncate cursor-text"
+                              onClick={() => { setEditingTodoId(todo.id); setEditingTitle(todo.title) }}
+                            >
+                              {todo.title}
+                            </span>
+                          )}
+                          {editingDueTodoId === todo.id ? (
+                            <input
+                              type="text"
+                              autoFocus
+                              placeholder="Jun 15"
+                              className="font-body text-xs text-gray-500 bg-transparent border-b border-primary outline-none w-16 flex-shrink-0"
+                              value={editingDueText}
+                              onChange={e => setEditingDueText(e.target.value)}
+                              onBlur={() => {
+                                const parsed = parseSmartDate(editingDueText)
+                                parsed ? updateTodoDueDate(todo.id, parsed) : setEditingDueTodoId(null)
+                              }}
+                              onKeyDown={e => {
+                                if (e.key === 'Enter') {
+                                  const parsed = parseSmartDate(editingDueText)
+                                  parsed ? updateTodoDueDate(todo.id, parsed) : setEditingDueTodoId(null)
+                                }
+                                if (e.key === 'Escape') setEditingDueTodoId(null)
+                              }}
+                            />
+                          ) : (
+                            <button
+                              onClick={() => {
+                                setEditingDueTodoId(todo.id)
+                                setEditingDueText(todo.due_date ? format(new Date(todo.due_date + 'T12:00:00'), 'MMM d') : '')
+                              }}
+                              className={`font-body text-xs flex-shrink-0 transition-opacity ${overdue ? 'text-red-500 font-semibold' : todo.due_date ? 'text-gray-400' : 'text-gray-300 opacity-0 group-hover:opacity-100'}`}
+                            >
+                              {todo.due_date ? format(new Date(todo.due_date + 'T12:00:00'), 'MMM d') : 'date'}
+                            </button>
+                          )}
+                          <button onClick={() => deleteTodo(todo.id)} className="flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity text-gray-300 hover:text-red-400">
+                            <Trash2 size={12} />
+                          </button>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+
+                {/* Completed sub-section */}
+                {completedTodos.length > 0 && (
+                  <div className="mt-3 pt-3 border-t border-gray-100">
+                    <button
+                      onClick={() => setShowCompletedTodos(v => !v)}
+                      className="flex items-center gap-1.5 font-body text-xs text-gray-400 hover:text-gray-600 transition-colors mb-2"
+                    >
+                      {showCompletedTodos ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                      Completed ({completedTodos.length})
+                    </button>
+                    {showCompletedTodos && (
+                      <div className="space-y-1.5">
+                        {completedTodos.map(todo => (
+                          <div key={todo.id} className="flex items-center gap-2 group py-0.5">
+                            <button onClick={() => toggleTodo(todo.id, false)} className="flex-shrink-0 text-primary hover:text-primary/70 transition-colors">
+                              <CheckCircle size={14} />
+                            </button>
+                            <span className="font-body text-xs text-gray-400 flex-1 min-w-0 truncate line-through">{todo.title}</span>
+                            {todo.completed_at && (
+                              <span className="font-body text-xs text-gray-300 flex-shrink-0">
+                                {format(new Date(todo.completed_at), 'MMM d')}
+                              </span>
+                            )}
+                            <button onClick={() => deleteTodo(todo.id)} className="flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity text-gray-300 hover:text-red-400">
+                              <Trash2 size={12} />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </SectionCard>
+            )
+          })()}
         </div>
 
         {/* ── MIDDLE: Conditions / Medications / Care Team / Caretakers ── */}
